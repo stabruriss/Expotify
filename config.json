@@ -1,0 +1,22 @@
+{
+  "id": "ws_6b5b79ec",
+  "name": "Expotify",
+  "slug": "expotify",
+  "defaults": {
+    "model": "claude-sonnet-4-5-20250929",
+    "permissionMode": "safe",
+    "cyclablePermissionModes": [
+      "safe",
+      "ask",
+      "allow-all"
+    ],
+    "thinkingLevel": "think",
+    "enabledSourceSlugs": [],
+    "workingDirectory": "~/MyP/Expotify"
+  },
+  "localMcpServers": {
+    "enabled": true
+  },
+  "createdAt": 1770104578395,
+  "updatedAt": 1770104578397
+}

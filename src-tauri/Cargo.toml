@@ -1,0 +1,49 @@
+[package]
+name = "expotify"
+version = "0.1.0"
+description = "Spotify track info display with AI insights"
+authors = ["wunan"]
+edition = "2021"
+
+[lib]
+name = "expotify_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# OAuth & Auth
+oauth2 = "4"
+url = "2"
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.8"
+
+# Keychain storage
+keyring = "3"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Time utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+# Directories
+dirs = "5"
