@@ -1,4 +1,5 @@
 use crate::auth::{OpenAIAuth, SpotifyAuth};
+use crate::lyrics::{LyricsFetcher, LyricsInfo};
 use crate::spotify::{SpotifyApi, TrackInfo};
 use crate::storage::Settings;
 use crate::ai::OpenAIService;
@@ -13,6 +14,7 @@ pub struct AppState {
     pub openai_service: Arc<RwLock<Option<OpenAIService>>>,
     pub settings: Arc<RwLock<Settings>>,
     pub current_track: Arc<RwLock<Option<TrackInfo>>>,
+    pub lyrics_fetcher: LyricsFetcher,
 }
 
 // ============ Spotify Auth Commands ============
@@ -171,4 +173,22 @@ pub async fn get_auth_status(state: State<'_, AppState>) -> Result<AuthStatus, S
         spotify: state.spotify_auth.is_authenticated().await,
         openai: state.openai_auth.is_authenticated().await,
     })
+}
+
+// ============ Lyrics Commands ============
+
+#[tauri::command]
+pub async fn get_lyrics(
+    state: State<'_, AppState>,
+    track_id: String,
+    track_name: String,
+    artist: String,
+    album: String,
+    duration_ms: u64,
+) -> Result<LyricsInfo, String> {
+    state
+        .lyrics_fetcher
+        .get_lyrics(&track_id, &track_name, &artist, &album, duration_ms)
+        .await
+        .map_err(|e| e.to_string())
 }

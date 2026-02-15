@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { TrackInfo, Settings, AuthStatus } from "../types";
+import type { TrackInfo, Settings, AuthStatus, LyricsInfo } from "../types";
 
 // ============ Spotify Auth ============
 
@@ -64,4 +64,22 @@ export async function updateSettings(settings: Settings): Promise<void> {
 
 export async function getAuthStatus(): Promise<AuthStatus> {
   return invoke("get_auth_status");
+}
+
+// ============ Lyrics ============
+
+export async function getLyrics(
+  trackId: string,
+  trackName: string,
+  artist: string,
+  album: string,
+  durationMs: number
+): Promise<LyricsInfo> {
+  return invoke("get_lyrics", {
+    trackId,
+    trackName,
+    artist,
+    album,
+    durationMs,
+  });
 }

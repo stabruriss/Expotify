@@ -1,6 +1,7 @@
 mod auth;
 mod ai;
 mod commands;
+mod lyrics;
 mod spotify;
 mod storage;
 
@@ -51,6 +52,7 @@ pub fn run() {
                 openai_service,
                 settings: Arc::new(RwLock::new(settings)),
                 current_track: Arc::new(RwLock::new(None)),
+                lyrics_fetcher: lyrics::LyricsFetcher::new(),
             };
 
             app.manage(state);
@@ -71,6 +73,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::get_auth_status,
+            commands::get_lyrics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

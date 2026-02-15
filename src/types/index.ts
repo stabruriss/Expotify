@@ -26,3 +26,20 @@ export interface AuthStatus {
   spotify: boolean;
   openai: boolean;
 }
+
+// Lyrics
+export interface LyricsLine {
+  time_ms: number;
+  text: string;
+}
+
+export type LyricsSource = "NetEase" | "Lrclib" | "PetitLyrics" | "None";
+
+export interface LyricsInfo {
+  track_id: string;
+  is_instrumental: boolean;
+  synced_lines: LyricsLine[];
+  plain_lyrics: string | null;
+  translation_lines: LyricsLine[];
+  source: LyricsSource;
+}

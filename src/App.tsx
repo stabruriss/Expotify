@@ -1,5 +1,7 @@
 import { useAuth } from "./hooks/useAuth";
 import { useTrack } from "./hooks/useTrack";
+import { useLyrics } from "./hooks/useLyrics";
+import { LyricsDisplay } from "./components/LyricsDisplay";
 import "./App.css";
 
 function App() {
@@ -8,6 +10,7 @@ function App() {
     enabled: authStatus.spotify,
     pollInterval: 3,
   });
+  const { lyrics, currentLineIndex, loading: lyricsLoading, error: lyricsError } = useLyrics({ track });
 
   // Show auth screen if not logged in
   if (!authStatus.spotify) {
@@ -97,6 +100,14 @@ function App() {
               </button>
             </div>
           )}
+
+          {/* Lyrics */}
+          <LyricsDisplay
+            lyrics={lyrics}
+            currentLineIndex={currentLineIndex}
+            loading={lyricsLoading}
+            error={lyricsError}
+          />
         </div>
       ) : (
         <div className="no-track">
