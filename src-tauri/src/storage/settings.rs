@@ -15,6 +15,9 @@ pub struct Settings {
     /// Enable web search for AI
     #[serde(default)]
     pub ai_web_search: bool,
+    /// Auto-generate AI insight on track change
+    #[serde(default)]
+    pub ai_auto: bool,
     /// Window position (x, y) - None means default position
     pub window_position: Option<(f64, f64)>,
     /// Window opacity (0.0 - 1.0)
@@ -31,6 +34,7 @@ impl Default for Settings {
             ai_model: "gpt-5.2".to_string(),
             ai_prompt: DEFAULT_AI_PROMPT.to_string(),
             ai_web_search: false,
+            ai_auto: false,
             window_position: None,
             window_opacity: 0.95,
         }

@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
+import Markdown from "react-markdown";
 import { useAuth } from "./hooks/useAuth";
 import { useTrack } from "./hooks/useTrack";
+import { useLyrics } from "./hooks/useLyrics";
+import { LyricsDisplay } from "./components/LyricsDisplay";
 import { getSettings, updateSettings } from "./lib/tauri";
 import type { Settings } from "./types";
 import { AVAILABLE_MODELS, DEFAULT_AI_PROMPT } from "./types";
@@ -8,15 +11,16 @@ import "./App.css";
 
 function App() {
   const { authStatus, loading: authLoading, loginOpenai, logoutOpenai } = useAuth();
-  const {
-    track,
-    loading: trackLoading,
-    error: trackError,
-    spotifyRunning,
-  } = useTrack({ pollInterval: 3 });
-
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const {
+    track,
+    aiLoading,
+    error: trackError,
+    spotifyRunning,
+    fetchAi,
+  } = useTrack({ pollInterval: 3, autoAi: settings?.ai_auto ?? false });
+  const { lyrics, currentLineIndex, loading: lyricsLoading, error: lyricsError } = useLyrics({ track });
   const [draftModel, setDraftModel] = useState("");
   const [draftPrompt, setDraftPrompt] = useState("");
   const [draftWebSearch, setDraftWebSearch] = useState(false);
@@ -66,6 +70,17 @@ function App() {
     setDraftPrompt(DEFAULT_AI_PROMPT);
   };
 
+  const toggleAutoAi = async () => {
+    if (!settings) return;
+    const updated = { ...settings, ai_auto: !settings.ai_auto };
+    try {
+      await updateSettings(updated);
+      setSettings(updated);
+    } catch (e) {
+      console.error("Failed to toggle auto AI", e);
+    }
+  };
+
   return (
     <main className="container player-screen">
       <header className="header">
@@ -99,9 +114,7 @@ function App() {
         </div>
       )}
 
-      {spotifyRunning && trackLoading && !track && (
-        <div className="loading">Loading...</div>
-      )}
+      {/* removed global loading — track info now shows instantly */}
 
       {trackError && <div className="error">{trackError}</div>}
 
@@ -127,24 +140,59 @@ function App() {
             {track.is_playing ? "▶ Playing" : "⏸ Paused"}
           </div>
 
-          {track.ai_description && (
-            <div className="ai-description">
-              <p>{track.ai_description}</p>
-              {track.ai_used_web_search && (
-                <span className="ai-source-badge">🌐 Web</span>
+          {track.ai_description ? (
+            <>
+              <div className="ai-description">
+                <Markdown>{track.ai_description}</Markdown>
+                {track.ai_used_web_search && (
+                  <span className="ai-source-badge">🌐 Web</span>
+                )}
+              </div>
+              {authStatus.openai && (
+                <div className="ai-controls">
+                  <button onClick={fetchAi} disabled={aiLoading} className="ai-generate-btn">
+                    {aiLoading ? "Generating..." : "Regenerate"}
+                  </button>
+                  <button
+                    className={`auto-toggle ${settings?.ai_auto ? "active" : ""}`}
+                    onClick={toggleAutoAi}
+                  >
+                    Auto
+                  </button>
+                </div>
               )}
+            </>
+          ) : aiLoading ? (
+            <div className="ai-description ai-loading">
+              <p>AI 正在生成介绍...</p>
             </div>
-          )}
-
-          {!track.ai_description && !authStatus.openai && (
-            <div className="ai-prompt">
-              <button onClick={loginOpenai} disabled={authLoading} className="connect-ai-btn">
-                {authLoading ? "Connecting..." : "Connect ChatGPT to see AI insights"}
+          ) : authStatus.openai ? (
+            <div className="ai-controls">
+              <button onClick={fetchAi} className="ai-generate-btn">
+                AI Insight
+              </button>
+              <button
+                className={`auto-toggle ${settings?.ai_auto ? "active" : ""}`}
+                onClick={toggleAutoAi}
+              >
+                Auto
               </button>
             </div>
+          ) : (
+            <button onClick={loginOpenai} disabled={authLoading} className="connect-ai-btn">
+              {authLoading ? "Connecting..." : "Connect ChatGPT to see AI insights"}
+            </button>
           )}
+
+          {/* Lyrics */}
+          <LyricsDisplay
+            lyrics={lyrics}
+            currentLineIndex={currentLineIndex}
+            loading={lyricsLoading}
+            error={lyricsError}
+          />
         </div>
-      ) : spotifyRunning && !trackLoading ? (
+      ) : spotifyRunning ? (
         <div className="no-track">
           <p>No track playing</p>
           <p className="hint">Play something on Spotify to see it here</p>

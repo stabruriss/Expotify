@@ -128,6 +128,12 @@ impl OpenAIService {
         // Parse SSE stream to extract text from response.completed event
         let (description, used_web_search) = parse_sse_response(&response)?;
 
+        log::info!(
+            "AI description for '{}': web_search={}",
+            track.name,
+            used_web_search
+        );
+
         // Cache the result
         self.cache.set(track.id.clone(), description.clone()).await;
 
