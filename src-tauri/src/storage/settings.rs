@@ -10,18 +10,27 @@ pub struct Settings {
     pub show_ai_description: bool,
     /// AI model to use
     pub ai_model: String,
+    /// Custom AI prompt template
+    pub ai_prompt: String,
+    /// Enable web search for AI
+    #[serde(default)]
+    pub ai_web_search: bool,
     /// Window position (x, y) - None means default position
     pub window_position: Option<(f64, f64)>,
     /// Window opacity (0.0 - 1.0)
     pub window_opacity: f64,
 }
 
+pub const DEFAULT_AI_PROMPT: &str = "请用中文简洁地介绍这首歌曲（100字以内）：\n\n歌曲: {name}\n艺术家: {artist}\n专辑: {album}\n\n介绍应包含：歌曲的风格/流派、创作背景或有趣的故事（如果知道的话）。不要重复歌曲名和艺术家名。直接给出介绍，不需要开头语。";
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             poll_interval_secs: 3,
             show_ai_description: true,
-            ai_model: "gpt-4o-mini".to_string(),
+            ai_model: "gpt-5.2".to_string(),
+            ai_prompt: DEFAULT_AI_PROMPT.to_string(),
+            ai_web_search: false,
             window_position: None,
             window_opacity: 0.95,
         }

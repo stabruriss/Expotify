@@ -1,22 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { TrackInfo, Settings, AuthStatus } from "../types";
 
-// ============ Spotify Auth ============
+// ============ Spotify Status ============
 
-export async function spotifyIsAuthenticated(): Promise<boolean> {
-  return invoke("spotify_is_authenticated");
-}
-
-export async function spotifyGetAuthUrl(): Promise<string> {
-  return invoke("spotify_get_auth_url");
-}
-
-export async function spotifyExchangeCode(code: string): Promise<void> {
-  return invoke("spotify_exchange_code", { code });
-}
-
-export async function spotifyLogout(): Promise<void> {
-  return invoke("spotify_logout");
+export async function isSpotifyRunning(): Promise<boolean> {
+  return invoke("is_spotify_running");
 }
 
 // ============ OpenAI Auth ============
@@ -25,15 +13,8 @@ export async function openaiIsAuthenticated(): Promise<boolean> {
   return invoke("openai_is_authenticated");
 }
 
-export async function openaiGetAuthUrl(): Promise<string> {
-  return invoke("openai_get_auth_url");
-}
-
-export async function openaiExchangeCode(
-  code: string,
-  receivedState: string
-): Promise<void> {
-  return invoke("openai_exchange_code", { code, receivedState });
+export async function openaiLogin(): Promise<void> {
+  return invoke("openai_login");
 }
 
 export async function openaiLogout(): Promise<void> {
