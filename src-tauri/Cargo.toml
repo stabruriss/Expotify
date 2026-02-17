@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -25,14 +25,10 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 # OAuth & Auth
-oauth2 = "4"
 url = "2"
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
-
-# Keychain storage
-keyring = "3"
 
 # Logging
 log = "0.4"
@@ -47,3 +43,6 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Directories
 dirs = "5"
+
+# Open URLs in browser
+open = "5"

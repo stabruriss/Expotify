@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Gemini API key
+.gemini_api_key
+.env.local

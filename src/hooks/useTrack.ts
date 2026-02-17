@@ -1,36 +1,81 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { TrackInfo } from "../types";
-import { getCurrentTrackWithAi } from "../lib/tauri";
+import { getCurrentTrack, getCurrentTrackWithAi, isSpotifyRunning } from "../lib/tauri";
+
+const AI_COOLDOWN_MS = 3000;
 
 interface UseTrackOptions {
-  pollInterval?: number; // in seconds
-  enabled?: boolean;
+  pollInterval?: number;
+  autoAi?: boolean;
 }
 
 export function useTrack(options: UseTrackOptions = {}) {
-  const { pollInterval = 3, enabled = true } = options;
+  const { pollInterval = 3, autoAi = false } = options;
 
   const [track, setTrack] = useState<TrackInfo | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [spotifyRunning, setSpotifyRunning] = useState(true);
+  const [aiLoading, setAiLoading] = useState(false);
   const lastTrackId = useRef<string | null>(null);
+  const aiLoadingRef = useRef(false);
+  const lastAiFetchTime = useRef(0);
+  const autoAiRef = useRef(autoAi);
+
+  // Keep ref in sync with prop
+  autoAiRef.current = autoAi;
+
+  const fetchAi = useCallback(async () => {
+    const now = Date.now();
+    if (aiLoadingRef.current || now - lastAiFetchTime.current < AI_COOLDOWN_MS) return;
+    aiLoadingRef.current = true;
+    lastAiFetchTime.current = now;
+    setAiLoading(true);
+    try {
+      const aiTrack = await getCurrentTrackWithAi();
+      if (aiTrack && aiTrack.id === lastTrackId.current) {
+        setTrack((prev) =>
+          prev && prev.id === aiTrack.id
+            ? {
+                ...prev,
+                ai_description: aiTrack.ai_description,
+                ai_used_web_search: aiTrack.ai_used_web_search,
+              }
+            : prev
+        );
+      }
+    } catch (err) {
+      console.error("AI fetch failed:", err);
+    } finally {
+      aiLoadingRef.current = false;
+      setAiLoading(false);
+    }
+  }, []);
 
   const fetchTrack = useCallback(async () => {
-    if (!enabled) return;
-
     try {
-      setLoading(true);
       setError(null);
 
-      const trackInfo = await getCurrentTrackWithAi();
+      const running = await isSpotifyRunning();
+      setSpotifyRunning(running);
 
-      // Only update if track changed or it's the first fetch
+      if (!running) {
+        setTrack(null);
+        lastTrackId.current = null;
+        return;
+      }
+
+      const trackInfo = await getCurrentTrack();
+
       if (trackInfo) {
         if (trackInfo.id !== lastTrackId.current) {
           lastTrackId.current = trackInfo.id;
           setTrack(trackInfo);
+
+          // Auto-fetch AI if enabled
+          if (autoAiRef.current) {
+            fetchAi();
+          }
         } else {
-          // Update progress and playing state without triggering full re-render
           setTrack((prev) =>
             prev
               ? {
@@ -47,27 +92,20 @@ export function useTrack(options: UseTrackOptions = {}) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
     }
-  }, [enabled]);
+  }, [fetchAi]);
 
   useEffect(() => {
-    if (!enabled) return;
-
-    // Initial fetch
     fetchTrack();
-
-    // Set up polling
     const interval = setInterval(fetchTrack, pollInterval * 1000);
-
     return () => clearInterval(interval);
-  }, [fetchTrack, pollInterval, enabled]);
+  }, [fetchTrack, pollInterval]);
 
   return {
     track,
-    loading,
+    aiLoading,
     error,
-    refetch: fetchTrack,
+    spotifyRunning,
+    fetchAi,
   };
 }

@@ -1,19 +1,19 @@
 mod auth;
 mod ai;
 mod commands;
+mod lyrics;
 mod spotify;
 mod storage;
 
-use auth::{OpenAIAuth, SpotifyAuth};
+use ai::OpenAIService;
+use auth::OpenAIAuth;
 use commands::AppState;
-use spotify::SpotifyApi;
 use storage::Settings;
 use std::sync::Arc;
 use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::RunEvent;
 use tokio::sync::RwLock;
-
-// Spotify Client ID - you'll need to create an app at https://developer.spotify.com/dashboard
-const SPOTIFY_CLIENT_ID: &str = "YOUR_SPOTIFY_CLIENT_ID";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,56 +22,87 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let spotify_auth = Arc::new(SpotifyAuth::new(SPOTIFY_CLIENT_ID.to_string()));
+            // Token is loaded synchronously from keychain inside new()
             let openai_auth = Arc::new(OpenAIAuth::new());
-
-            // Load stored tokens
-            let spotify_auth_clone = Arc::clone(&spotify_auth);
-            let openai_auth_clone = Arc::clone(&openai_auth);
-
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = spotify_auth_clone.load_stored_token().await {
-                    log::warn!("Failed to load Spotify token: {}", e);
-                }
-                if let Err(e) = openai_auth_clone.load_stored_token().await {
-                    log::warn!("Failed to load OpenAI token: {}", e);
-                }
-            });
+            let openai_service = if openai_auth.has_stored_token() {
+                Arc::new(RwLock::new(Some(OpenAIService::new(Arc::clone(&openai_auth)))))
+            } else {
+                Arc::new(RwLock::new(None))
+            };
 
             // Load settings
             let settings = Settings::load().unwrap_or_default();
 
-            // Initialize OpenAI service if authenticated
-            let openai_service = Arc::new(RwLock::new(None));
-
             let state = AppState {
-                spotify_auth,
                 openai_auth,
-                spotify_api: SpotifyApi::new(),
                 openai_service,
                 settings: Arc::new(RwLock::new(settings)),
                 current_track: Arc::new(RwLock::new(None)),
+                lyrics_fetcher: lyrics::LyricsFetcher::new(),
             };
 
             app.manage(state);
 
+            // Build tray menu
+            let toggle_overlay = MenuItem::with_id(app, "toggle_overlay", "Show/Hide Overlay", true, None::<&str>)?;
+            let open_expotify = MenuItem::with_id(app, "open_expotify", "Open Expotify", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+
+            let menu = Menu::with_items(app, &[&toggle_overlay, &open_expotify, &quit])?;
+
+            if let Some(tray) = app.tray_by_id("main") {
+                tray.set_menu(Some(menu))?;
+                tray.on_menu_event(move |app, event| {
+                    match event.id.as_ref() {
+                        "toggle_overlay" => {
+                            if let Some(window) = app.get_webview_window("overlay") {
+                                if window.is_visible().unwrap_or(false) {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                }
+                            }
+                        }
+                        "open_expotify" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    }
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::spotify_is_authenticated,
-            commands::spotify_get_auth_url,
-            commands::spotify_exchange_code,
-            commands::spotify_logout,
+            commands::is_spotify_running,
             commands::openai_is_authenticated,
-            commands::openai_get_auth_url,
-            commands::openai_exchange_code,
+            commands::openai_login,
             commands::openai_logout,
             commands::get_current_track,
             commands::get_current_track_with_ai,
             commands::get_settings,
             commands::update_settings,
             commands::get_auth_status,
+            commands::get_lyrics,
+            commands::toggle_overlay,
+            commands::show_main_window,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        });
 }

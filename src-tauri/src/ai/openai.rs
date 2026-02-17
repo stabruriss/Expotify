@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -7,37 +7,63 @@ use super::cache::TrackInfoCache;
 use crate::auth::OpenAIAuth;
 use crate::spotify::TrackInfo;
 
-const OPENAI_API_BASE: &str = "https://api.openai.com/v1";
+const CODEX_API_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 
 #[derive(Debug, Serialize)]
-struct ChatRequest {
+struct CodexRequest {
     model: String,
-    messages: Vec<Message>,
-    max_tokens: u32,
-    temperature: f32,
+    input: Vec<InputMessage>,
+    instructions: String,
+    store: bool,
+    stream: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<Tool>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Message {
+#[derive(Debug, Serialize)]
+struct Tool {
+    r#type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InputMessage {
     role: String,
     content: String,
 }
 
+// SSE response parsing types
 #[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
+struct CompletedEvent {
+    response: CompletedResponse,
 }
 
 #[derive(Debug, Deserialize)]
-struct Choice {
-    message: Message,
+struct CompletedResponse {
+    output: Vec<OutputItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum OutputItem {
+    #[serde(rename = "reasoning")]
+    Reasoning {},
+    #[serde(rename = "message")]
+    Message { content: Vec<ContentPart> },
+    #[serde(rename = "web_search_call")]
+    WebSearchCall {},
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContentPart {
+    text: String,
 }
 
 pub struct OpenAIService {
     client: Client,
     auth: Arc<OpenAIAuth>,
     cache: TrackInfoCache,
-    model: String,
 }
 
 impl OpenAIService {
@@ -46,70 +72,103 @@ impl OpenAIService {
             client: Client::new(),
             auth,
             cache: TrackInfoCache::default(),
-            model: "gpt-4o-mini".to_string(),
         }
     }
 
-    /// Set the model to use
-    pub fn set_model(&mut self, model: String) {
-        self.model = model;
-    }
-
     /// Generate track description using AI
-    pub async fn get_track_description(&self, track: &TrackInfo) -> Result<String> {
+    /// Returns (description, used_web_search)
+    pub async fn get_track_description(
+        &self,
+        track: &TrackInfo,
+        model: &str,
+        prompt_template: &str,
+        web_search: bool,
+    ) -> Result<(String, bool)> {
         // Check cache first
         if let Some(cached) = self.cache.get(&track.id).await {
-            return Ok(cached);
+            return Ok((cached, false));
         }
 
         let token = self.auth.get_access_token().await?;
 
-        let prompt = format!(
-            r#"请用中文简洁地介绍这首歌曲（100字以内）：
+        let prompt = prompt_template
+            .replace("{name}", &track.name)
+            .replace("{artist}", &track.artist)
+            .replace("{album}", &track.album);
 
-歌曲: {}
-艺术家: {}
-专辑: {}
+        let tools = if web_search {
+            vec![Tool { r#type: "web_search".to_string() }]
+        } else {
+            vec![]
+        };
 
-介绍应包含：歌曲的风格/流派、创作背景或有趣的故事（如果知道的话）。不要重复歌曲名和艺术家名。直接给出介绍，不需要开头语。"#,
-            track.name, track.artist, track.album
-        );
-
-        let request = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![Message {
+        let request = CodexRequest {
+            model: model.to_string(),
+            input: vec![InputMessage {
                 role: "user".to_string(),
                 content: prompt,
             }],
-            max_tokens: 200,
-            temperature: 0.7,
+            instructions: "你是一个音乐专家，擅长简洁地介绍歌曲。".to_string(),
+            store: false,
+            stream: true,
+            tools,
         };
 
         let response = self
             .client
-            .post(format!("{}/chat/completions", OPENAI_API_BASE))
+            .post(CODEX_API_ENDPOINT)
             .bearer_auth(&token)
             .json(&request)
             .send()
             .await?
             .error_for_status()?
-            .json::<ChatResponse>()
+            .text()
             .await?;
 
-        let description = response
-            .choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .unwrap_or_else(|| "无法获取歌曲信息".to_string());
+        // Parse SSE stream to extract text from response.completed event
+        let (description, used_web_search) = parse_sse_response(&response)?;
+
+        log::info!(
+            "AI description for '{}': web_search={}",
+            track.name,
+            used_web_search
+        );
 
         // Cache the result
         self.cache.set(track.id.clone(), description.clone()).await;
 
-        Ok(description)
+        Ok((description, used_web_search))
     }
+}
 
-    /// Clear the cache
-    pub async fn clear_cache(&self) {
-        self.cache.clear().await;
+/// Parse SSE response to extract the final text output and whether web search was used.
+/// Returns (text, used_web_search).
+fn parse_sse_response(body: &str) -> Result<(String, bool)> {
+    for chunk in body.split("\n\n") {
+        for line in chunk.lines() {
+            if let Some(data) = line.strip_prefix("data: ") {
+                if let Ok(event) = serde_json::from_str::<CompletedEvent>(data) {
+                    let mut text = None;
+                    let mut used_web_search = false;
+                    for item in &event.response.output {
+                        match item {
+                            OutputItem::WebSearchCall {} => {
+                                used_web_search = true;
+                            }
+                            OutputItem::Message { content } => {
+                                if let Some(part) = content.first() {
+                                    text = Some(part.text.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(t) = text {
+                        return Ok((t, used_web_search));
+                    }
+                }
+            }
+        }
     }
+    anyhow::bail!("No text output found in response")
 }
