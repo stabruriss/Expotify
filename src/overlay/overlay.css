@@ -1,0 +1,304 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  background: transparent;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============ Frame ============ */
+
+.overlay-frame {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  overflow: hidden;
+}
+
+/* Watercolor brush stroke frame */
+.overlay-brush-frame {
+  position: absolute;
+  inset: 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  opacity: 0.85;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Content layer */
+.overlay-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  padding: 24px 36px 20px;
+}
+
+/* ============ Header ============ */
+
+.overlay-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.overlay-cover {
+  width: 34px;
+  height: 34px;
+  border-radius: 4px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.overlay-cover-placeholder {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.overlay-meta {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.overlay-track-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.92);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay-track-artist {
+  font-size: 10px;
+  font-weight: 400;
+  color: rgba(255,255,255,0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+/* ============ AI Toggle ============ */
+
+.overlay-ai-toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.overlay-ai-btn {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.6);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.overlay-ai-btn:hover {
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.9);
+}
+
+.overlay-ai-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* LED indicator */
+.led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.led.idle {
+  background: rgba(255,255,255,0.10);
+}
+
+.led.active {
+  background: #7BA67D;
+  box-shadow: 0 0 6px rgba(123,166,125,0.6), 0 0 12px rgba(123,166,125,0.2);
+}
+
+.led.loading {
+  background: #f97316;
+  box-shadow: 0 0 6px rgba(249,115,22,0.6);
+  animation: led-pulse 1s ease-in-out infinite;
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px rgba(249,115,22,0.6); }
+  50% { opacity: 0.3; box-shadow: 0 0 2px rgba(249,115,22,0.2); }
+}
+
+/* ============ Lyrics ============ */
+
+.overlay-lyrics {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.overlay-lyrics-line {
+  text-align: center;
+  transition: font-size 0.3s ease, color 0.3s ease;
+  line-height: 1.4;
+  padding: 1px 0;
+}
+
+.overlay-lyrics-line.current {
+  font-size: 15px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.92);
+}
+
+.overlay-lyrics-line.near {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.42);
+}
+
+.overlay-lyrics-line.far {
+  font-size: 11px;
+  font-weight: 400;
+  color: rgba(255,255,255,0.22);
+}
+
+.overlay-lyrics-line.farthest {
+  font-size: 10px;
+  font-weight: 400;
+  color: rgba(255,255,255,0.10);
+}
+
+.overlay-lyrics-translation {
+  font-size: 9px;
+  color: rgba(255,255,255,0.25);
+  margin-top: -1px;
+}
+
+.overlay-lyrics-line.current .overlay-lyrics-translation {
+  color: rgba(255,255,255,0.38);
+  font-size: 10px;
+}
+
+.overlay-no-lyrics {
+  text-align: center;
+  font-size: 11px;
+  color: rgba(255,255,255,0.18);
+  padding: 10px 0;
+}
+
+/* ============ AI Panel ============ */
+
+.overlay-ai-section {
+  flex-shrink: 0;
+  margin-top: 4px;
+  position: relative;
+  z-index: 2;
+}
+
+.overlay-ai-content {
+  background: none;
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  border-radius: 0;
+  padding: 6px 0 0;
+  text-align: left;
+  max-height: 90px;
+  overflow-y: auto;
+}
+
+.overlay-ai-content::-webkit-scrollbar {
+  width: 3px;
+}
+
+.overlay-ai-content::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.10);
+  border-radius: 2px;
+}
+
+.overlay-ai-text {
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.70);
+}
+
+.overlay-ai-text p {
+  margin: 0 0 4px 0;
+}
+
+.overlay-ai-text p:last-child {
+  margin-bottom: 0;
+}
+
+.overlay-ai-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.overlay-ai-content:hover .overlay-ai-footer {
+  opacity: 1;
+}
+
+.overlay-ai-regen {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.30);
+  font-size: 10px;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.2s;
+  text-decoration: none;
+}
+
+.overlay-ai-regen:hover {
+  color: rgba(255,255,255,0.70);
+}
+
+.overlay-ai-regen:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============ States ============ */
+
+.overlay-not-playing {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: rgba(255,255,255,0.18);
+}

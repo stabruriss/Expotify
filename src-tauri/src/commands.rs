@@ -4,7 +4,7 @@ use crate::lyrics::{LyricsFetcher, LyricsInfo};
 use crate::spotify::{self, TrackInfo};
 use crate::storage::Settings;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::RwLock;
 
 pub struct AppState {
@@ -168,4 +168,27 @@ pub async fn get_lyrics(
         .get_lyrics(&track_id, &track_name, &artist, &album, duration_ms)
         .await
         .map_err(|e| e.to_string())
+}
+
+// ============ Window Commands ============
+
+#[tauri::command]
+pub async fn toggle_overlay(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        if window.is_visible().map_err(|e| e.to_string())? {
+            window.hide().map_err(|e| e.to_string())?;
+        } else {
+            window.show().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn show_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
