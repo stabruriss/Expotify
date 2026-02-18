@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Markdown from "react-markdown";
 import { useAuth } from "./hooks/useAuth";
 import { useTrack } from "./hooks/useTrack";
@@ -16,15 +16,48 @@ function App() {
   const {
     track,
     aiLoading,
+    regenCooldown,
     error: trackError,
     spotifyRunning,
     fetchAi,
   } = useTrack({ pollInterval: 3, autoAi: settings?.ai_auto ?? false });
-  const { lyrics, currentLineIndex, loading: lyricsLoading, error: lyricsError } = useLyrics({ track });
+  const { lyrics, currentLineIndex, loading: lyricsLoading, error: lyricsError, refetchLyrics } = useLyrics({ track });
+  const [cachedAi, setCachedAi] = useState<string | null>(null);
   const [draftModel, setDraftModel] = useState("");
   const [draftPrompt, setDraftPrompt] = useState("");
   const [draftWebSearch, setDraftWebSearch] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Read AI insight from localStorage cache when track changes
+  useEffect(() => {
+    if (track?.id) {
+      const stored = localStorage.getItem(`ai_insight_${track.id}`);
+      setCachedAi(stored);
+    } else {
+      setCachedAi(null);
+    }
+  }, [track?.id]);
+
+  // Write AI insight to localStorage when it arrives
+  useEffect(() => {
+    if (track?.ai_description && track.id) {
+      localStorage.setItem(`ai_insight_${track.id}`, track.ai_description);
+      setCachedAi(track.ai_description);
+    }
+  }, [track?.ai_description]);
+
+  // Sync AI insight from other window via storage event
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (track?.id && e.key === `ai_insight_${track.id}` && e.newValue) {
+        setCachedAi(e.newValue);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [track?.id]);
+
+  const displayedAi = useMemo(() => track?.ai_description ?? cachedAi, [track?.ai_description, cachedAi]);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -114,69 +147,77 @@ function App() {
         </div>
       )}
 
-      {/* removed global loading — track info now shows instantly */}
-
       {trackError && <div className="error">{trackError}</div>}
 
       {spotifyRunning && track ? (
         <div className="track-info">
-          {track.album_art_url && (
-            <img
-              src={track.album_art_url}
-              alt={track.album}
-              className="album-art"
-            />
-          )}
-
-          <div className="track-details">
-            <h2 className="track-name">{track.name}</h2>
-            <p className="track-artist">{track.artist}</p>
-            <p className="track-album">{track.album}</p>
+          {/* Horizontal header: cover + meta + play status */}
+          <div className="track-header">
+            {track.album_art_url && (
+              <img
+                src={track.album_art_url}
+                alt={track.album}
+                className="album-art"
+              />
+            )}
+            <div className="track-meta">
+              <h2 className="track-name">{track.name}</h2>
+              <p className="track-artist">{track.artist}</p>
+              <p className="track-album">{track.album}</p>
+            </div>
+            <div
+              className={`playing-badge ${track.is_playing ? "playing" : "paused"}`}
+            >
+              {track.is_playing ? "\u25B6" : "\u23F8"}
+            </div>
           </div>
 
-          <div
-            className={`playing-indicator ${track.is_playing ? "playing" : "paused"}`}
-          >
-            {track.is_playing ? "▶ Playing" : "⏸ Paused"}
-          </div>
-
-          {track.ai_description ? (
+          {/* AI section */}
+          {displayedAi ? (
             <>
               <div className="ai-description">
-                <Markdown>{track.ai_description}</Markdown>
+                <Markdown>{displayedAi}</Markdown>
                 {track.ai_used_web_search && (
-                  <span className="ai-source-badge">🌐 Web</span>
+                  <span className="ai-source-badge">Web</span>
                 )}
               </div>
               {authStatus.openai && (
                 <div className="ai-controls">
-                  <button onClick={fetchAi} disabled={aiLoading} className="ai-generate-btn">
-                    {aiLoading ? "Generating..." : "Regenerate"}
+                  <button onClick={() => fetchAi(true)} disabled={aiLoading || regenCooldown} className="ai-btn-skeu">
+                    {aiLoading ? "Generating..." : regenCooldown ? "Cooldown..." : "Regenerate"}
                   </button>
-                  <button
-                    className={`auto-toggle ${settings?.ai_auto ? "active" : ""}`}
-                    onClick={toggleAutoAi}
-                  >
-                    Auto
-                  </button>
+                  <div className="auto-mode">
+                    <label className="toggle-switch">
+                      <input type="checkbox" checked={settings?.ai_auto ?? false} onChange={toggleAutoAi} />
+                      <span className="toggle-track" />
+                    </label>
+                    <div className="auto-mode-info">
+                      <span className="auto-mode-label">Auto mode</span>
+                      <span className="auto-mode-desc">Auto generate AI insights for new track</span>
+                    </div>
+                  </div>
                 </div>
               )}
             </>
           ) : aiLoading ? (
             <div className="ai-description ai-loading">
-              <p>AI 正在生成介绍...</p>
+              <p>Generating AI insights...</p>
             </div>
           ) : authStatus.openai ? (
             <div className="ai-controls">
-              <button onClick={fetchAi} className="ai-generate-btn">
+              <button onClick={() => fetchAi()} className="ai-btn-skeu">
                 AI Insight
               </button>
-              <button
-                className={`auto-toggle ${settings?.ai_auto ? "active" : ""}`}
-                onClick={toggleAutoAi}
-              >
-                Auto
-              </button>
+              <div className="auto-mode">
+                <label className="toggle-switch">
+                  <input type="checkbox" checked={settings?.ai_auto ?? false} onChange={toggleAutoAi} />
+                  <span className="toggle-track" />
+                </label>
+                <div className="auto-mode-info">
+                  <span className="auto-mode-label">Auto mode</span>
+                  <span className="auto-mode-desc">Auto generate AI insights for new track</span>
+                </div>
+              </div>
             </div>
           ) : (
             <button onClick={loginOpenai} disabled={authLoading} className="connect-ai-btn">
@@ -190,6 +231,7 @@ function App() {
             currentLineIndex={currentLineIndex}
             loading={lyricsLoading}
             error={lyricsError}
+            onRefresh={refetchLyrics}
           />
         </div>
       ) : spotifyRunning ? (

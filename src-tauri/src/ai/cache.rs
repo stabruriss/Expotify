@@ -40,6 +40,11 @@ impl TrackInfoCache {
         self.cache.read().await.contains_key(track_id)
     }
 
+    /// Remove a specific track from the cache
+    pub async fn remove(&self, track_id: &str) {
+        self.cache.write().await.remove(track_id);
+    }
+
     /// Clear the cache
     pub async fn clear(&self) {
         self.cache.write().await.clear();

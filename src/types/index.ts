@@ -33,13 +33,15 @@ export const AVAILABLE_MODELS = [
   { id: "gpt-5", name: "GPT-5", desc: "" },
 ] as const;
 
-export const DEFAULT_AI_PROMPT = `请用中文简洁地介绍这首歌曲（100字以内）：
+export const DEFAULT_AI_PROMPT = `Briefly introduce this song (under 500 words):
 
-歌曲: {name}
-艺术家: {artist}
-专辑: {album}
+Song: {name}
+Artist: {artist}
+Album: {album}
 
-介绍应包含：歌曲的风格/流派、创作背景或有趣的故事（如果知道的话）。不要重复歌曲名和艺术家名。直接给出介绍，不需要开头语。`;
+Include the song's style/genre and creative background. Do not repeat the song title or artist name. Give the introduction directly without preamble. No citation links in the output.
+
+Search online for interesting stories about the track, the creator, and details about this specific version and performer, and weave them into the introduction.`;
 
 // Lyrics
 export interface LyricsLine {
@@ -47,7 +49,7 @@ export interface LyricsLine {
   text: string;
 }
 
-export type LyricsSource = "NetEase" | "Lrclib" | "PetitLyrics" | "None";
+export type LyricsSource = "NetEase" | "QQMusic" | "Kugou" | "Lrclib" | "PetitLyrics" | "None";
 
 export interface LyricsInfo {
   track_id: string;
@@ -56,4 +58,5 @@ export interface LyricsInfo {
   plain_lyrics: string | null;
   translation_lines: LyricsLine[];
   source: LyricsSource;
+  fetch_log: string[];
 }

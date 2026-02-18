@@ -24,7 +24,7 @@ pub struct Settings {
     pub window_opacity: f64,
 }
 
-pub const DEFAULT_AI_PROMPT: &str = "请用中文简洁地介绍这首歌曲（100字以内）：\n\n歌曲: {name}\n艺术家: {artist}\n专辑: {album}\n\n介绍应包含：歌曲的风格/流派、创作背景或有趣的故事（如果知道的话）。不要重复歌曲名和艺术家名。直接给出介绍，不需要开头语。";
+pub const DEFAULT_AI_PROMPT: &str = "Briefly introduce this song (under 500 words):\n\nSong: {name}\nArtist: {artist}\nAlbum: {album}\n\nInclude the song's style/genre and creative background. Do not repeat the song title or artist name. Give the introduction directly without preamble. No citation links in the output.\n\nSearch online for interesting stories about the track, the creator, and details about this specific version and performer, and weave them into the introduction.";
 
 impl Default for Settings {
     fn default() -> Self {
@@ -33,7 +33,7 @@ impl Default for Settings {
             show_ai_description: true,
             ai_model: "gpt-5.2".to_string(),
             ai_prompt: DEFAULT_AI_PROMPT.to_string(),
-            ai_web_search: false,
+            ai_web_search: true,
             ai_auto: false,
             window_position: None,
             window_opacity: 0.95,

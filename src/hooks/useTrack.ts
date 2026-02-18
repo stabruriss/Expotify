@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { TrackInfo } from "../types";
 import { getCurrentTrack, getCurrentTrackWithAi, isSpotifyRunning } from "../lib/tauri";
 
-const AI_COOLDOWN_MS = 3000;
+const REGEN_COOLDOWN_MS = 5000;
 
 interface UseTrackOptions {
   pollInterval?: number;
@@ -16,22 +16,28 @@ export function useTrack(options: UseTrackOptions = {}) {
   const [error, setError] = useState<string | null>(null);
   const [spotifyRunning, setSpotifyRunning] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [regenCooldown, setRegenCooldown] = useState(false);
   const lastTrackId = useRef<string | null>(null);
   const aiLoadingRef = useRef(false);
-  const lastAiFetchTime = useRef(0);
   const autoAiRef = useRef(autoAi);
+  const regenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep ref in sync with prop
   autoAiRef.current = autoAi;
 
-  const fetchAi = useCallback(async () => {
-    const now = Date.now();
-    if (aiLoadingRef.current || now - lastAiFetchTime.current < AI_COOLDOWN_MS) return;
+  const fetchAi = useCallback(async (force = false) => {
+    if (aiLoadingRef.current) return;
     aiLoadingRef.current = true;
-    lastAiFetchTime.current = now;
     setAiLoading(true);
+    if (force) {
+      setRegenCooldown(true);
+      if (regenTimerRef.current) clearTimeout(regenTimerRef.current);
+      regenTimerRef.current = setTimeout(() => setRegenCooldown(false), REGEN_COOLDOWN_MS);
+    }
     try {
-      const aiTrack = await getCurrentTrackWithAi();
+      const aiTrack = await getCurrentTrackWithAi(force);
+      setAiError(null);
       if (aiTrack && aiTrack.id === lastTrackId.current) {
         setTrack((prev) =>
           prev && prev.id === aiTrack.id
@@ -44,7 +50,9 @@ export function useTrack(options: UseTrackOptions = {}) {
         );
       }
     } catch (err) {
-      console.error("AI fetch failed:", err);
+      const errStr = err instanceof Error ? err.message : String(err);
+      console.error("AI fetch failed:", errStr);
+      setAiError(errStr);
     } finally {
       aiLoadingRef.current = false;
       setAiLoading(false);
@@ -101,9 +109,18 @@ export function useTrack(options: UseTrackOptions = {}) {
     return () => clearInterval(interval);
   }, [fetchTrack, pollInterval]);
 
+  // Clean up regen cooldown timer on unmount
+  useEffect(() => {
+    return () => {
+      if (regenTimerRef.current) clearTimeout(regenTimerRef.current);
+    };
+  }, []);
+
   return {
     track,
     aiLoading,
+    aiError,
+    regenCooldown,
     error,
     spotifyRunning,
     fetchAi,

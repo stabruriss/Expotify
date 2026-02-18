@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum LyricsSource {
     NetEase,
+    QQMusic,
+    Kugou,
     Lrclib,
     PetitLyrics,
     None,
@@ -22,6 +24,8 @@ pub struct LyricsInfo {
     pub plain_lyrics: Option<String>,
     pub translation_lines: Vec<LyricsLine>,
     pub source: LyricsSource,
+    #[serde(default)]
+    pub fetch_log: Vec<String>,
 }
 
 impl LyricsInfo {
@@ -33,6 +37,7 @@ impl LyricsInfo {
             plain_lyrics: None,
             translation_lines: Vec::new(),
             source: LyricsSource::None,
+            fetch_log: Vec::new(),
         }
     }
 
@@ -44,6 +49,7 @@ impl LyricsInfo {
             plain_lyrics: None,
             translation_lines: Vec::new(),
             source: LyricsSource::None,
+            fetch_log: Vec::new(),
         }
     }
 

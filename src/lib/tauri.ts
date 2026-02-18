@@ -27,8 +27,8 @@ export async function getCurrentTrack(): Promise<TrackInfo | null> {
   return invoke("get_current_track");
 }
 
-export async function getCurrentTrackWithAi(): Promise<TrackInfo | null> {
-  return invoke("get_current_track_with_ai");
+export async function getCurrentTrackWithAi(force = false): Promise<TrackInfo | null> {
+  return invoke("get_current_track_with_ai", { force });
 }
 
 // ============ Settings ============
@@ -47,6 +47,29 @@ export async function getAuthStatus(): Promise<AuthStatus> {
   return invoke("get_auth_status");
 }
 
+// ============ Window Commands ============
+
+export async function showMainWindow(): Promise<void> {
+  return invoke("show_main_window");
+}
+
+// ============ Overlay Geometry ============
+
+export interface OverlayGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export async function saveOverlayGeometry(x: number, y: number, width: number, height: number): Promise<void> {
+  return invoke("save_overlay_geometry", { x, y, width, height });
+}
+
+export async function loadOverlayGeometry(): Promise<OverlayGeometry | null> {
+  return invoke("load_overlay_geometry");
+}
+
 // ============ Lyrics ============
 
 export async function getLyrics(
@@ -54,7 +77,8 @@ export async function getLyrics(
   trackName: string,
   artist: string,
   album: string,
-  durationMs: number
+  durationMs: number,
+  force = false
 ): Promise<LyricsInfo> {
   return invoke("get_lyrics", {
     trackId,
@@ -62,5 +86,6 @@ export async function getLyrics(
     artist,
     album,
     durationMs,
+    force,
   });
 }

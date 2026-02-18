@@ -193,6 +193,7 @@ impl NetEaseClient {
             plain_lyrics,
             translation_lines,
             source: LyricsSource::NetEase,
+            fetch_log: Vec::new(),
         }))
     }
 }
