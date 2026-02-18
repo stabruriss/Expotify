@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTrack } from "../hooks/useTrack";
 import { useLyrics } from "../hooks/useLyrics";
 import { getAuthStatus, showMainWindow, saveOverlayGeometry } from "../lib/tauri";
+import { useUpdateCheck } from "../hooks/useUpdateCheck";
 import frameImg from "./assets/frame.png";
 import "./overlay.css";
 
@@ -42,6 +43,8 @@ export default function OverlayApp() {
     autoAi: false,
   });
   const { lyrics, currentLineIndex, loading: lyricsLoading, refetchLyrics } = useLyrics({ track });
+
+  const { updateAvailable, latestVersion, openRelease, dismiss } = useUpdateCheck();
 
   const [aiVisible, setAiVisible] = useState(false);
   const [cachedAi, setCachedAi] = useState<string | null>(null);
@@ -260,6 +263,18 @@ export default function OverlayApp() {
     return result;
   }, [lyrics, currentLineIndex]);
 
+  /* Update notification bar */
+  const updateBar = updateAvailable ? (
+    <div className="overlay-update-bar" data-no-drag="true">
+      <button className="overlay-update-btn" onClick={openRelease}>
+        v{latestVersion} available
+      </button>
+      <button className="overlay-update-dismiss" onClick={dismiss} title="Dismiss">
+        &times;
+      </button>
+    </div>
+  ) : null;
+
   /* Resize handles - watercolor dot indicators at both bottom corners */
   const resizeHandles = (
     <>
@@ -299,6 +314,7 @@ export default function OverlayApp() {
       <div className="overlay-frame" onMouseDown={handleMouseDown}>
         <div className="overlay-brush-frame" style={{ backgroundImage: `url(${frameImg})` }} />
         <div className="overlay-content">
+          {updateBar}
           <div className="overlay-not-playing">Spotify is not running</div>
         </div>
         {resizeHandles}
@@ -311,6 +327,7 @@ export default function OverlayApp() {
       <div className="overlay-frame" onMouseDown={handleMouseDown}>
         <div className="overlay-brush-frame" style={{ backgroundImage: `url(${frameImg})` }} />
         <div className="overlay-content">
+          {updateBar}
           <div className="overlay-not-playing">No track playing</div>
         </div>
         {resizeHandles}
@@ -323,6 +340,7 @@ export default function OverlayApp() {
       <div className="overlay-brush-frame" style={{ backgroundImage: `url(${frameImg})` }} />
 
       <div className="overlay-content">
+        {updateBar}
         {/* Header: vinyl cover + song info + open button + AI stamp */}
         <div className="overlay-header">
           {coverElement}

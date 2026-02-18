@@ -4,6 +4,7 @@ mod commands;
 mod lyrics;
 mod spotify;
 mod storage;
+mod updater;
 
 use ai::OpenAIService;
 use auth::OpenAIAuth;
@@ -105,6 +106,8 @@ pub fn run() {
             commands::show_main_window,
             commands::save_overlay_geometry,
             commands::load_overlay_geometry,
+            commands::check_for_update,
+            commands::open_url,
         ])
         .on_window_event(|window, event| {
             // Hide main window on close instead of destroying, so it can be reopened

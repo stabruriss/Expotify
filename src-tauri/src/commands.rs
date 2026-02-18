@@ -209,6 +209,20 @@ pub async fn get_lyrics(
         .map_err(|e| e.to_string())
 }
 
+// ============ Update Check ============
+
+#[tauri::command]
+pub async fn check_for_update() -> Result<crate::updater::UpdateInfo, String> {
+    crate::updater::check_for_update()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| format!("Failed to open URL: {}", e))
+}
+
 // ============ Window Commands ============
 
 #[tauri::command]

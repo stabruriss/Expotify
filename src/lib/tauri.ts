@@ -70,6 +70,23 @@ export async function loadOverlayGeometry(): Promise<OverlayGeometry | null> {
   return invoke("load_overlay_geometry");
 }
 
+// ============ Update Check ============
+
+export interface UpdateInfo {
+  has_update: boolean;
+  latest_version: string;
+  download_url: string;
+  release_url: string;
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo> {
+  return invoke("check_for_update");
+}
+
+export async function openUrl(url: string): Promise<void> {
+  return invoke("open_url", { url });
+}
+
 // ============ Lyrics ============
 
 export async function getLyrics(
