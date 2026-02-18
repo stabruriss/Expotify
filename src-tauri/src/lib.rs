@@ -7,7 +7,7 @@ mod storage;
 
 use ai::OpenAIService;
 use auth::OpenAIAuth;
-use commands::AppState;
+use commands::{AppState, load_overlay_geometry};
 use storage::Settings;
 use std::sync::Arc;
 use tauri::Manager;
@@ -42,6 +42,17 @@ pub fn run() {
             };
 
             app.manage(state);
+
+            // Restore overlay geometry before showing the window
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                if let Ok(Some(geo)) = load_overlay_geometry() {
+                    if geo.width > 0.0 && geo.height > 0.0 {
+                        let _ = overlay.set_size(tauri::LogicalSize::new(geo.width, geo.height));
+                        let _ = overlay.set_position(tauri::LogicalPosition::new(geo.x, geo.y));
+                    }
+                }
+                let _ = overlay.show();
+            }
 
             // Build tray menu
             let toggle_overlay = MenuItem::with_id(app, "toggle_overlay", "Show/Hide Overlay", true, None::<&str>)?;
@@ -92,7 +103,18 @@ pub fn run() {
             commands::get_lyrics,
             commands::toggle_overlay,
             commands::show_main_window,
+            commands::save_overlay_geometry,
+            commands::load_overlay_geometry,
         ])
+        .on_window_event(|window, event| {
+            // Hide main window on close instead of destroying, so it can be reopened
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {

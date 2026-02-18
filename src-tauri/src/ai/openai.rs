@@ -77,15 +77,18 @@ impl OpenAIService {
 
     /// Generate track description using AI
     /// Returns (description, used_web_search)
+    /// If `force` is true, bypass the cache and re-generate.
     pub async fn get_track_description(
         &self,
         track: &TrackInfo,
         model: &str,
         prompt_template: &str,
         web_search: bool,
+        force: bool,
     ) -> Result<(String, bool)> {
-        // Check cache first
-        if let Some(cached) = self.cache.get(&track.id).await {
+        if force {
+            self.cache.remove(&track.id).await;
+        } else if let Some(cached) = self.cache.get(&track.id).await {
             return Ok((cached, false));
         }
 
@@ -108,7 +111,7 @@ impl OpenAIService {
                 role: "user".to_string(),
                 content: prompt,
             }],
-            instructions: "你是一个音乐专家，擅长简洁地介绍歌曲。".to_string(),
+            instructions: "You are a music expert with deep knowledge of musical styles, genres, creators, music theory, music and art history, as well as fascinating stories and trivia. You excel at making music accessible and engaging, effectively conveying knowledge while sparking the listener's curiosity.".to_string(),
             store: false,
             stream: true,
             tools,

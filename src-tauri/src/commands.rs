@@ -7,6 +7,43 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::RwLock;
 
+// ============ Overlay Geometry ============
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct OverlayGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+fn geometry_path() -> Result<std::path::PathBuf, String> {
+    let config_dir = dirs::config_dir()
+        .ok_or_else(|| "Could not find config directory".to_string())?;
+    let app_dir = config_dir.join("expotify");
+    std::fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
+    Ok(app_dir.join("overlay_geometry.json"))
+}
+
+#[tauri::command]
+pub fn save_overlay_geometry(x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
+    let geo = OverlayGeometry { x, y, width, height };
+    let path = geometry_path()?;
+    let content = serde_json::to_string(&geo).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn load_overlay_geometry() -> Result<Option<OverlayGeometry>, String> {
+    let path = geometry_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let geo: OverlayGeometry = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(Some(geo))
+}
+
 pub struct AppState {
     pub openai_auth: Arc<OpenAIAuth>,
     pub openai_service: Arc<RwLock<Option<OpenAIService>>>,
@@ -88,6 +125,7 @@ pub async fn get_current_track(state: State<'_, AppState>) -> Result<Option<Trac
 #[tauri::command]
 pub async fn get_current_track_with_ai(
     state: State<'_, AppState>,
+    force: Option<bool>,
 ) -> Result<Option<TrackInfo>, String> {
     let track_info = tokio::task::spawn_blocking(|| spotify::applescript::get_current_track())
         .await
@@ -106,7 +144,7 @@ pub async fn get_current_track_with_ai(
         let prompt = settings.ai_prompt.clone();
         let web_search = settings.ai_web_search;
         drop(settings);
-        match openai.get_track_description(&info, &model, &prompt, web_search).await {
+        match openai.get_track_description(&info, &model, &prompt, web_search, force.unwrap_or(false)).await {
             Ok((description, used_web_search)) => {
                 info.ai_description = Some(description);
                 info.ai_used_web_search = used_web_search;
@@ -162,10 +200,11 @@ pub async fn get_lyrics(
     artist: String,
     album: String,
     duration_ms: u64,
+    force: Option<bool>,
 ) -> Result<LyricsInfo, String> {
     state
         .lyrics_fetcher
-        .get_lyrics(&track_id, &track_name, &artist, &album, duration_ms)
+        .get_lyrics(&track_id, &track_name, &artist, &album, duration_ms, force.unwrap_or(false))
         .await
         .map_err(|e| e.to_string())
 }
