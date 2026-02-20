@@ -106,6 +106,9 @@ pub fn run() {
             commands::show_main_window,
             commands::save_overlay_geometry,
             commands::load_overlay_geometry,
+            commands::spotify_play_pause,
+            commands::spotify_next_track,
+            commands::spotify_previous_track,
             commands::check_for_update,
             commands::open_url,
         ])

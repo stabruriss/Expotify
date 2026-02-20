@@ -31,6 +31,20 @@ export async function getCurrentTrackWithAi(force = false): Promise<TrackInfo | 
   return invoke("get_current_track_with_ai", { force });
 }
 
+// ============ Spotify Playback Control ============
+
+export async function spotifyPlayPause(): Promise<void> {
+  return invoke("spotify_play_pause");
+}
+
+export async function spotifyNextTrack(): Promise<void> {
+  return invoke("spotify_next_track");
+}
+
+export async function spotifyPreviousTrack(): Promise<void> {
+  return invoke("spotify_previous_track");
+}
+
 // ============ Settings ============
 
 export async function getSettings(): Promise<Settings> {

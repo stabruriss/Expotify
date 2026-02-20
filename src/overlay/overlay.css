@@ -580,6 +580,77 @@ html, body, #root {
     transparent 100%);
 }
 
+/* ============ Cover Area (non-rotating wrapper) ============ */
+
+.overlay-cover-area {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+}
+
+/* ============ Cover Control Buttons ============ */
+
+.overlay-cover-btn {
+  position: absolute;
+  z-index: 10;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%,
+    rgba(51,166,184,0.40) 0%,
+    rgba(51,166,184,0.15) 60%,
+    transparent 100%);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.2s, background 0.2s;
+  padding: 0;
+}
+
+.overlay-cover-btn svg {
+  pointer-events: none;
+}
+
+/* Positions: symmetric at four corners */
+.overlay-btn-tl { top: -3px; left: -3px; }
+.overlay-btn-tr { top: -3px; right: -3px; }
+.overlay-btn-bl { bottom: -3px; left: -3px; }
+.overlay-btn-br { bottom: -3px; right: -3px; }
+
+.overlay-cover-area:hover .overlay-cover-btn {
+  opacity: 1;
+}
+
+.overlay-cover-btn:hover {
+  opacity: 1 !important;
+  transform: scale(1.4);
+  background: radial-gradient(circle at 35% 35%,
+    rgba(51,166,184,0.60) 0%,
+    rgba(51,166,184,0.30) 60%,
+    transparent 100%);
+}
+
+/* ============ Compact Layout ============ */
+
+.overlay-collapsed {
+  background: transparent;
+}
+
+.overlay-compact-content {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  margin: 12px;
+}
+
+.overlay-collapsed .overlay-cover-area:hover .overlay-cover-btn {
+  opacity: 1;
+}
+
 /* ============ States ============ */
 
 .overlay-not-playing {

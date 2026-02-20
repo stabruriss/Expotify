@@ -97,3 +97,33 @@ end tell
         ai_used_web_search: false,
     }))
 }
+
+/// Control Spotify playback via AppleScript
+pub fn spotify_play_pause() -> Result<()> {
+    run_spotify_command("playpause")
+}
+
+pub fn spotify_next_track() -> Result<()> {
+    run_spotify_command("next track")
+}
+
+pub fn spotify_previous_track() -> Result<()> {
+    run_spotify_command("previous track")
+}
+
+fn run_spotify_command(cmd: &str) -> Result<()> {
+    if !is_spotify_running() {
+        anyhow::bail!("Spotify is not running");
+    }
+    let script = format!(r#"tell application "Spotify" to {}"#, cmd);
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .context("Failed to execute osascript")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("AppleScript error: {}", stderr);
+    }
+    Ok(())
+}

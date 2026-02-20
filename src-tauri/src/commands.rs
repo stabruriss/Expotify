@@ -159,6 +159,32 @@ pub async fn get_current_track_with_ai(
     Ok(Some(info))
 }
 
+// ============ Spotify Playback Control ============
+
+#[tauri::command]
+pub async fn spotify_play_pause() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| spotify::applescript::spotify_play_pause())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn spotify_next_track() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| spotify::applescript::spotify_next_track())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn spotify_previous_track() -> Result<(), String> {
+    tokio::task::spawn_blocking(|| spotify::applescript::spotify_previous_track())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 // ============ Settings Commands ============
 
 #[tauri::command]
