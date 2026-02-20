@@ -1,9 +1,10 @@
 import { useState, useMemo, useEffect, useCallback, useRef, type PointerEvent, type MouseEvent } from "react";
 import Markdown from "react-markdown";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
 import { useTrack } from "../hooks/useTrack";
 import { useLyrics } from "../hooks/useLyrics";
-import { getAuthStatus, showMainWindow, saveOverlayGeometry } from "../lib/tauri";
+import { getAuthStatus, showMainWindow, saveOverlayGeometry, spotifyPlayPause, spotifyNextTrack, spotifyPreviousTrack } from "../lib/tauri";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
 import frameImg from "./assets/frame.png";
 import "./overlay.css";
@@ -46,6 +47,10 @@ export default function OverlayApp() {
 
   const { updateAvailable, latestVersion, openRelease, dismiss } = useUpdateCheck();
 
+  const [collapsed, setCollapsed] = useState(false);
+  const collapsedRef = useRef(false);
+  const expandedGeoRef = useRef({ width: 420, height: 268 });
+
   const [aiVisible, setAiVisible] = useState(false);
   const [cachedAi, setCachedAi] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -71,13 +76,27 @@ export default function OverlayApp() {
     };
 
     // Read initial geometry from actual window (already positioned by Rust)
+    // If saved geometry was too small (e.g. from a collapsed session), restore defaults
     const initGeo = async () => {
       try {
         const [pos, size, sf] = await Promise.all([win.outerPosition(), win.outerSize(), win.scaleFactor()]);
-        geo.x = pos.x / sf;
-        geo.y = pos.y / sf;
-        geo.width = size.width / sf;
-        geo.height = size.height / sf;
+        const w = size.width / sf;
+        const h = size.height / sf;
+        if (w < 200 || h < 120) {
+          // Saved geometry was from a collapsed state — restore defaults
+          await win.setMinSize(new LogicalSize(300, 180));
+          await win.setResizable(true);
+          await win.setSize(new LogicalSize(420, 268));
+          geo.x = pos.x / sf;
+          geo.y = pos.y / sf;
+          geo.width = 420;
+          geo.height = 268;
+        } else {
+          geo.x = pos.x / sf;
+          geo.y = pos.y / sf;
+          geo.width = w;
+          geo.height = h;
+        }
       } catch {}
       geoReady = true;
     };
@@ -92,6 +111,7 @@ export default function OverlayApp() {
     });
 
     const unlistenResize = win.onResized(async ({ payload }) => {
+      if (collapsedRef.current) return; // Don't save compact geometry
       try {
         const sf = await win.scaleFactor();
         geo.width = payload.width / sf;
@@ -236,6 +256,47 @@ export default function OverlayApp() {
     showMainWindow();
   }, []);
 
+  const handleToggleCollapse = useCallback(async () => {
+    const win = getCurrentWindow();
+    const sf = await win.scaleFactor();
+
+    if (!collapsed) {
+      const size = await win.outerSize();
+      expandedGeoRef.current = { width: size.width / sf, height: size.height / sf };
+      // Mark collapsed BEFORE resizing so the resize handler skips saving 72x72
+      collapsedRef.current = true;
+      await win.setMinSize(new LogicalSize(72, 72));
+      await win.setResizable(false);
+      await win.setSize(new LogicalSize(72, 72));
+    } else {
+      const { width, height } = expandedGeoRef.current;
+      await win.setSize(new LogicalSize(width, height));
+      await win.setMinSize(new LogicalSize(300, 180));
+      await win.setResizable(true);
+
+      // Clamp position so the expanded window stays on screen
+      try {
+        const pos = await win.outerPosition();
+        const wX = pos.x / sf;
+        const wY = pos.y / sf;
+        const screenW = window.screen.availWidth;
+        const screenH = window.screen.availHeight;
+        let newX = wX;
+        let newY = wY;
+        if (wX + width > screenW) newX = screenW - width;
+        if (wY + height > screenH) newY = screenH - height;
+        if (newX < 0) newX = 0;
+        if (newY < 0) newY = 0;
+        if (newX !== wX || newY !== wY) {
+          await win.setPosition(new LogicalPosition(newX, newY));
+        }
+      } catch {}
+      // Mark expanded AFTER resizing so subsequent events save the correct size
+      collapsedRef.current = false;
+    }
+    setCollapsed(!collapsed);
+  }, [collapsed]);
+
   const visibleLines = useMemo(() => {
     if (!lyrics?.synced_lines?.length) return [];
     const lines = lyrics.synced_lines;
@@ -297,7 +358,7 @@ export default function OverlayApp() {
     </>
   );
 
-  /* Vinyl cover element */
+  /* Vinyl cover element (rotates) */
   const coverElement = track ? (
     <div className={`overlay-cover-wrapper ${track.is_playing ? "playing" : ""}`}>
       <div className="overlay-vinyl-disc" />
@@ -308,6 +369,76 @@ export default function OverlayApp() {
       )}
     </div>
   ) : null;
+
+  /* Cover area: non-rotating wrapper with control buttons overlay */
+  const coverArea = track ? (
+    <div className="overlay-cover-area">
+      {coverElement}
+      {/* Top-left: collapse/expand */}
+      <button
+        className="overlay-cover-btn overlay-btn-tl"
+        data-no-drag="true"
+        onClick={handleToggleCollapse}
+        title={collapsed ? "Expand" : "Collapse"}
+      >
+        <svg width="7" height="7" viewBox="0 0 8 8" fill="none" stroke="rgba(51,166,184,0.85)" strokeWidth="1.8" strokeLinecap="round">
+          {collapsed ? <path d="M2 5L4 3L6 5" /> : <path d="M2 3L4 5L6 3" />}
+        </svg>
+      </button>
+      {/* Top-right: play/pause */}
+      <button
+        className="overlay-cover-btn overlay-btn-tr"
+        data-no-drag="true"
+        onClick={() => { spotifyPlayPause().catch(() => {}); }}
+        title={track.is_playing ? "Pause" : "Play"}
+      >
+        {track.is_playing ? (
+          <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
+            <rect x="2" y="1.5" width="1.5" height="5" rx="0.4" />
+            <rect x="4.5" y="1.5" width="1.5" height="5" rx="0.4" />
+          </svg>
+        ) : (
+          <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
+            <polygon points="2.5,1.5 6.5,4 2.5,6.5" />
+          </svg>
+        )}
+      </button>
+      {/* Bottom-left: previous */}
+      <button
+        className="overlay-cover-btn overlay-btn-bl"
+        data-no-drag="true"
+        onClick={() => { spotifyPreviousTrack().catch(() => {}); }}
+        title="Previous"
+      >
+        <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
+          <polygon points="4.5,1.5 1.5,4 4.5,6.5" />
+          <line x1="1.2" y1="1.5" x2="1.2" y2="6.5" stroke="rgba(51,166,184,0.85)" strokeWidth="1.2" />
+        </svg>
+      </button>
+      {/* Bottom-right: next */}
+      <button
+        className="overlay-cover-btn overlay-btn-br"
+        data-no-drag="true"
+        onClick={() => { spotifyNextTrack().catch(() => {}); }}
+        title="Next"
+      >
+        <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
+          <polygon points="3.5,1.5 6.5,4 3.5,6.5" />
+          <line x1="6.8" y1="1.5" x2="6.8" y2="6.5" stroke="rgba(51,166,184,0.85)" strokeWidth="1.2" />
+        </svg>
+      </button>
+    </div>
+  ) : null;
+
+  if (collapsed && track) {
+    return (
+      <div className="overlay-frame overlay-collapsed" onMouseDown={handleMouseDown}>
+        <div className="overlay-compact-content">
+          {coverArea}
+        </div>
+      </div>
+    );
+  }
 
   if (!spotifyRunning) {
     return (
@@ -343,7 +474,7 @@ export default function OverlayApp() {
         {updateBar}
         {/* Header: vinyl cover + song info + open button + AI stamp */}
         <div className="overlay-header">
-          {coverElement}
+          {coverArea}
           <div className="overlay-meta">
             <div className="overlay-track-name">{track.name}</div>
             <div className="overlay-track-artist">{track.artist}</div>
