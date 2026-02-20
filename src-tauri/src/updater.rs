@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const GITHUB_REPO: &str = "stabruriss/Expotify";
+const VERSION_URL: &str = "https://www.expotify.live/version.json";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Serialize, Clone, Debug)]
@@ -12,16 +12,10 @@ pub struct UpdateInfo {
 }
 
 #[derive(Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    html_url: String,
-    assets: Vec<GitHubAsset>,
-}
-
-#[derive(Deserialize)]
-struct GitHubAsset {
-    name: String,
-    browser_download_url: String,
+struct VersionManifest {
+    version: String,
+    download_url: String,
+    release_url: String,
 }
 
 fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
@@ -45,35 +39,22 @@ fn is_newer(remote: &str, current: &str) -> bool {
 }
 
 pub async fn check_for_update() -> Result<UpdateInfo, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!(
-        "https://api.github.com/repos/{}/releases/latest",
-        GITHUB_REPO
-    );
-
     let client = reqwest::Client::new();
-    let release: GitHubRelease = client
-        .get(&url)
+    let manifest: VersionManifest = client
+        .get(VERSION_URL)
         .header("User-Agent", format!("Expotify/{}", CURRENT_VERSION))
-        .header("Accept", "application/vnd.github.v3+json")
         .send()
         .await?
         .error_for_status()?
         .json()
         .await?;
 
-    let dmg_url = release
-        .assets
-        .iter()
-        .find(|a| a.name.ends_with(".dmg"))
-        .map(|a| a.browser_download_url.clone())
-        .unwrap_or_default();
-
-    let has_update = is_newer(&release.tag_name, CURRENT_VERSION);
+    let has_update = is_newer(&manifest.version, CURRENT_VERSION);
 
     Ok(UpdateInfo {
         has_update,
-        latest_version: release.tag_name.strip_prefix('v').unwrap_or(&release.tag_name).to_string(),
-        download_url: dmg_url,
-        release_url: release.html_url,
+        latest_version: manifest.version,
+        download_url: manifest.download_url,
+        release_url: manifest.release_url,
     })
 }
