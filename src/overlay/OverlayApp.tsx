@@ -77,26 +77,46 @@ export default function OverlayApp() {
 
     // Read initial geometry from actual window (already positioned by Rust)
     // If saved geometry was too small (e.g. from a collapsed session), restore defaults
+    // Also clamp position to screen bounds as a safety net
     const initGeo = async () => {
       try {
         const [pos, size, sf] = await Promise.all([win.outerPosition(), win.outerSize(), win.scaleFactor()]);
-        const w = size.width / sf;
-        const h = size.height / sf;
+        let w = size.width / sf;
+        let h = size.height / sf;
+        let x = pos.x / sf;
+        let y = pos.y / sf;
+
         if (w < 200 || h < 120) {
           // Saved geometry was from a collapsed state — restore defaults
           await win.setMinSize(new LogicalSize(300, 180));
           await win.setResizable(true);
           await win.setSize(new LogicalSize(420, 268));
-          geo.x = pos.x / sf;
-          geo.y = pos.y / sf;
-          geo.width = 420;
-          geo.height = 268;
-        } else {
-          geo.x = pos.x / sf;
-          geo.y = pos.y / sf;
-          geo.width = w;
-          geo.height = h;
+          w = 420;
+          h = 268;
         }
+
+        // Clamp position to keep overlay on-screen
+        const screenW = window.screen.availWidth;
+        const screenH = window.screen.availHeight;
+        const screenX = (window.screen as any).availLeft ?? 0;
+        const screenY = (window.screen as any).availTop ?? 0;
+        let clamped = false;
+        if (x + w < screenX + 50 || x > screenX + screenW - 50) {
+          x = screenX + screenW - w - 32;
+          clamped = true;
+        }
+        if (y + h < screenY + 50 || y > screenY + screenH - 50) {
+          y = screenY + screenH - h - 32;
+          clamped = true;
+        }
+        if (clamped) {
+          await win.setPosition(new LogicalPosition(x, y));
+        }
+
+        geo.x = x;
+        geo.y = y;
+        geo.width = w;
+        geo.height = h;
       } catch {}
       geoReady = true;
     };

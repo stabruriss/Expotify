@@ -49,7 +49,49 @@ pub fn run() {
                 if let Ok(Some(geo)) = load_overlay_geometry() {
                     if geo.width > 0.0 && geo.height > 0.0 {
                         let _ = overlay.set_size(tauri::LogicalSize::new(geo.width, geo.height));
-                        let _ = overlay.set_position(tauri::LogicalPosition::new(geo.x, geo.y));
+
+                        // Clamp position to ensure the overlay is on-screen
+                        let mut x = geo.x;
+                        let mut y = geo.y;
+                        let w = geo.width;
+                        let h = geo.height;
+
+                        if let Ok(monitors) = overlay.available_monitors() {
+                            let on_screen = monitors.iter().any(|m| {
+                                let pos = m.position();
+                                let size = m.size();
+                                let sf = m.scale_factor();
+                                let mx = pos.x as f64 / sf;
+                                let my = pos.y as f64 / sf;
+                                let mw = size.width as f64 / sf;
+                                let mh = size.height as f64 / sf;
+                                // At least 50px of the overlay must be visible on this monitor
+                                x + 50.0 > mx && x < mx + mw - 50.0 &&
+                                y + 50.0 > my && y < my + mh - 50.0
+                            });
+
+                            if !on_screen {
+                                // Reset to primary monitor or first available
+                                if let Some(m) = overlay.primary_monitor().ok().flatten()
+                                    .or_else(|| monitors.first().cloned())
+                                {
+                                    let pos = m.position();
+                                    let size = m.size();
+                                    let sf = m.scale_factor();
+                                    let mx = pos.x as f64 / sf;
+                                    let my = pos.y as f64 / sf;
+                                    let mw = size.width as f64 / sf;
+                                    let mh = size.height as f64 / sf;
+                                    // Place at bottom-right with some margin
+                                    x = mx + mw - w - 32.0;
+                                    y = my + mh - h - 32.0;
+                                    if x < mx { x = mx + 32.0; }
+                                    if y < my { y = my + 32.0; }
+                                }
+                            }
+                        }
+
+                        let _ = overlay.set_position(tauri::LogicalPosition::new(x, y));
                     }
                 }
                 let _ = overlay.show();
@@ -113,9 +155,9 @@ pub fn run() {
             commands::open_url,
         ])
         .on_window_event(|window, event| {
-            // Hide main window on close instead of destroying, so it can be reopened
+            // Hide windows on close instead of destroying, so they can be reopened
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                if window.label() == "main" || window.label() == "overlay" {
                     api.prevent_close();
                     let _ = window.hide();
                 }
