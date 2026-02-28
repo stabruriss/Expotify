@@ -1,3 +1,43 @@
+/* ============ Custom Fonts (overlay only) ============ */
+
+/* Japanese kana only — for hiragana/katakana rendering */
+@font-face {
+  font-family: "DartsFont";
+  src: url("../fonts/dartsfont.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+3040-309F, U+30A0-30FF, U+31F0-31FF;
+  /* Hiragana, Katakana, Katakana extensions */
+}
+
+/* 王羲之 快雪时晴帖 — lyrics & title primary font (Latin + CJK) */
+@font-face {
+  font-family: "WangXiZhi";
+  src: url("../fonts/WangZhi-KuaiXueShiQingTie-2.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 汉仪瘦金书简 — AI Insight primary, lyrics fallback */
+@font-face {
+  font-family: "HanYiShouJinShuJian";
+  src: url("../fonts/HanYiShouJinShuJian-1.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* 汉仪瘦金书繁 — fallback for characters not in Simplified font */
+@font-face {
+  font-family: "HanYiShouJinShuFan";
+  src: url("../fonts/HanYiShouJinShuFan-1.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -16,8 +56,9 @@ html, body, #root {
 }
 
 /* ============ Color Palette ============ */
-/* Lyrics green: #91B493 = rgba(145, 180, 147, X) */
-/* AI sakura:    #FEDFE1 = rgba(254, 223, 225, X) */
+/* Lyrics green:  #227D51 = rgba(34, 125, 81, X)   */
+/* Current line:  #9F353A                           */
+/* AI sakura:     #FEDFE1 = rgba(254, 223, 225, X)  */
 
 /* ============ Update Bar ============ */
 
@@ -52,7 +93,7 @@ html, body, #root {
 }
 
 .overlay-update-btn:hover {
-  color: #91B493;
+  color: #227D51;
 }
 
 .overlay-update-dismiss {
@@ -87,7 +128,7 @@ html, body, #root {
   width: 100%;
   height: 100%;
   position: relative;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-family: "DartsFont", "WangXiZhi", "HanYiShouJinShuJian", "HanYiShouJinShuFan", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
   overflow: hidden;
 }
 
@@ -141,7 +182,7 @@ html, body, #root {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1.5px solid rgba(145,180,147,0.25);
+  border: 1.5px solid rgba(34,125,81,0.25);
   pointer-events: none;
 }
 
@@ -154,7 +195,7 @@ html, body, #root {
   height: 40px;
   border-radius: 50%;
   object-fit: cover;
-  border: 1px solid rgba(145,180,147,0.18);
+  border: 1px solid rgba(34,125,81,0.18);
 }
 
 .overlay-cover-placeholder {
@@ -165,8 +206,8 @@ html, body, #root {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: rgba(145,180,147,0.08);
-  border: 1px solid rgba(145,180,147,0.12);
+  background: rgba(34,125,81,0.08);
+  border: 1px solid rgba(34,125,81,0.12);
 }
 
 @keyframes vinyl-spin {
@@ -181,18 +222,18 @@ html, body, #root {
 }
 
 .overlay-track-name {
-  font-size: 13px;
+  font-size: 20px;
   font-weight: 600;
-  color: #91B493;
+  color: #227D51;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .overlay-track-artist {
-  font-size: 10px;
+  font-size: 15px;
   font-weight: 400;
-  color: rgba(145,180,147,0.50);
+  color: rgba(34,125,81,0.50);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -270,12 +311,12 @@ html, body, #root {
 }
 
 .led.idle {
-  background: rgba(145,180,147,0.12);
+  background: rgba(34,125,81,0.12);
 }
 
 .led.active {
-  background: #91B493;
-  box-shadow: 0 0 6px rgba(145,180,147,0.5), 0 0 12px rgba(145,180,147,0.2);
+  background: #227D51;
+  box-shadow: 0 0 6px rgba(34,125,81,0.5), 0 0 12px rgba(34,125,81,0.2);
 }
 
 .led.loading {
@@ -322,44 +363,45 @@ html, body, #root {
 }
 
 .overlay-lyrics-line.current {
-  font-size: 15px;
+  font-size: 28px;
   font-weight: 700;
-  color: #91B493;
+  color: rgba(34,125,81,0.80);
+}
+
+/* Actual playing line — red override regardless of viewport position */
+.overlay-lyrics-line.is-playing {
+  color: #9F353A !important;
 }
 
 .overlay-lyrics-line.near {
-  font-size: 12px;
+  font-size: 22px;
   font-weight: 500;
-  color: rgba(145,180,147,0.45);
+  color: rgba(34,125,81,0.52);
 }
 
 .overlay-lyrics-line.far {
-  font-size: 11px;
+  font-size: 20px;
   font-weight: 400;
-  color: rgba(145,180,147,0.26);
+  color: rgba(34,125,81,0.32);
 }
 
 .overlay-lyrics-line.farthest {
-  font-size: 10px;
+  font-size: 18px;
   font-weight: 400;
-  color: rgba(145,180,147,0.13);
+  color: rgba(34,125,81,0.17);
 }
 
 .overlay-lyrics-translation {
-  font-size: 9px;
-  color: rgba(145,180,147,0.26);
+  /* inherit font-size from parent lyrics line */
+  color: inherit;
+  opacity: 0.65;
   margin-top: -1px;
-}
-
-.overlay-lyrics-line.current .overlay-lyrics-translation {
-  color: rgba(145,180,147,0.42);
-  font-size: 10px;
 }
 
 .overlay-no-lyrics {
   text-align: center;
-  font-size: 11px;
-  color: rgba(145,180,147,0.22);
+  font-size: 17px;
+  color: rgba(34,125,81,0.22);
   padding: 10px 0;
 }
 
@@ -373,7 +415,7 @@ html, body, #root {
   z-index: 2;
   background: none;
   border: none;
-  color: rgba(145,180,147,0);
+  color: rgba(34,125,81,0);
   cursor: pointer;
   padding: 4px;
   transition: color 0.2s;
@@ -382,11 +424,11 @@ html, body, #root {
 }
 
 .overlay-body:hover .overlay-lyrics-refresh {
-  color: rgba(145,180,147,0.30);
+  color: rgba(34,125,81,0.30);
 }
 
 .overlay-lyrics-refresh:hover {
-  color: rgba(145,180,147,0.70) !important;
+  color: rgba(34,125,81,0.70) !important;
 }
 
 .overlay-lyrics-refresh:disabled {
@@ -413,25 +455,26 @@ html, body, #root {
   flex-direction: column;
   justify-content: center;
   padding: 8px 12px;
-  background: rgba(12,15,20,0.82);
-  animation: ai-fade-in 0.35s ease-out;
+  background: transparent;
   pointer-events: auto;
 }
 
-/* AI panel watercolor background */
+/* AI panel background — solid dark with organic displaced edges, rasterized to prevent scroll-triggered repaints */
 .overlay-ai-bg {
   position: absolute;
-  inset: -8px;
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  background-position: center;
-  opacity: 0.25;
+  inset: -6px;
+  background: #1C1C1C;
+  border-radius: 8px;
   pointer-events: none;
+  filter: url(#rough-edge);
+  will-change: transform;
+  contain: strict;
+  backface-visibility: hidden;
 }
 
 @keyframes ai-fade-in {
-  from { opacity: 0; transform: scale(0.96); }
-  to { opacity: 1; transform: scale(1); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .overlay-ai-content {
@@ -444,6 +487,7 @@ html, body, #root {
   text-align: left;
   max-height: 100%;
   overflow-y: auto;
+  animation: ai-fade-in 0.35s ease-out;
 }
 
 .overlay-ai-content::-webkit-scrollbar {
@@ -456,9 +500,10 @@ html, body, #root {
 }
 
 .overlay-ai-text {
-  font-size: 12.5px;
+  font-size: 19px;
   line-height: 1.55;
   color: rgba(254,223,225,0.88);
+  font-family: "DartsFont", "HanYiShouJinShuJian", "HanYiShouJinShuFan", -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 .overlay-ai-text p {
@@ -471,7 +516,7 @@ html, body, #root {
 
 .overlay-ai-web-badge {
   display: inline-block;
-  font-size: 9px;
+  font-size: 14px;
   font-weight: 500;
   color: rgba(254,223,225,0.40);
   border: 1px solid rgba(254,223,225,0.12);
@@ -498,7 +543,7 @@ html, body, #root {
   background: none;
   border: none;
   color: rgba(254,223,225,0.32);
-  font-size: 10px;
+  font-size: 15px;
   padding: 0;
   cursor: pointer;
   transition: color 0.2s;
@@ -520,7 +565,7 @@ html, body, #root {
   flex-shrink: 0;
   background: none;
   border: none;
-  color: rgba(145,180,147,0.25);
+  color: rgba(34,125,81,0.25);
   cursor: pointer;
   padding: 4px;
   transition: color 0.2s, transform 0.2s;
@@ -528,7 +573,7 @@ html, body, #root {
 }
 
 .overlay-open-main:hover {
-  color: rgba(145,180,147,0.70);
+  color: rgba(34,125,81,0.70);
   transform: scale(1.1);
 }
 
@@ -566,8 +611,8 @@ html, body, #root {
   height: 8px;
   border-radius: 50%;
   background: radial-gradient(circle at 35% 35%,
-    rgba(145,180,147,0.22) 0%,
-    rgba(145,180,147,0.10) 60%,
+    rgba(34,125,81,0.22) 0%,
+    rgba(34,125,81,0.10) 60%,
     transparent 100%);
   transition: transform 0.2s, background 0.2s;
 }
@@ -575,8 +620,8 @@ html, body, #root {
 .overlay-resize-handle:hover .overlay-resize-dot {
   transform: scale(1.5);
   background: radial-gradient(circle at 35% 35%,
-    rgba(145,180,147,0.45) 0%,
-    rgba(145,180,147,0.20) 60%,
+    rgba(34,125,81,0.45) 0%,
+    rgba(34,125,81,0.20) 60%,
     transparent 100%);
 }
 
@@ -658,6 +703,6 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  color: rgba(145,180,147,0.22);
+  font-size: 20px;
+  color: rgba(34,125,81,0.22);
 }

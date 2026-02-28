@@ -5,15 +5,26 @@ use super::types::TrackInfo;
 
 /// Check if Spotify desktop app is currently running
 pub fn is_spotify_running() -> bool {
+    // Try AppleScript first (most reliable in release builds)
     let output = Command::new("osascript")
         .arg("-e")
         .arg(r#"tell application "System Events" to (name of processes) contains "Spotify""#)
         .output();
 
     match output {
-        Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "true",
-        Err(_) => false,
+        Ok(out) if out.status.success() => {
+            return String::from_utf8_lossy(&out.stdout).trim() == "true";
+        }
+        _ => {}
     }
+
+    // Fallback: pgrep (works in dev mode without AppleScript permissions)
+    Command::new("pgrep")
+        .arg("-x")
+        .arg("Spotify")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
 }
 
 /// Get the current playing track from Spotify via AppleScript

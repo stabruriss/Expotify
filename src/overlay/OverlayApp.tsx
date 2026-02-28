@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef, type PointerEvent, type MouseEvent } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, type PointerEvent, type MouseEvent, type WheelEvent } from "react";
 import Markdown from "react-markdown";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
@@ -9,10 +9,8 @@ import { useUpdateCheck } from "../hooks/useUpdateCheck";
 import frameImg from "./assets/frame.png";
 import "./overlay.css";
 
-/* Try to import generated watercolor assets; fall back gracefully */
-let aiPanelBgImg: string | undefined;
+/* Try to import generated assets; fall back gracefully */
 let aiStampImg: string | undefined;
-try { aiPanelBgImg = new URL("./assets/ai-panel-bg.png", import.meta.url).href; } catch {}
 try { aiStampImg = new URL("./assets/ai-stamp.png", import.meta.url).href; } catch {}
 
 const VISIBLE_LINES = 7;
@@ -54,7 +52,10 @@ export default function OverlayApp() {
   const [aiVisible, setAiVisible] = useState(false);
   const [cachedAi, setCachedAi] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [lyricsScrollOffset, setLyricsScrollOffset] = useState(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollAccumRef = useRef(0);
 
   // Save overlay geometry on move/resize (restore is handled by Rust before window shows)
   useEffect(() => {
@@ -151,6 +152,7 @@ export default function OverlayApp() {
 
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (scrollResetRef.current) clearTimeout(scrollResetRef.current);
       flushGeo(); // Flush pending save on cleanup
       window.removeEventListener("beforeunload", onBeforeUnload);
       unlistenMove.then((fn) => fn());
@@ -317,32 +319,79 @@ export default function OverlayApp() {
     setCollapsed(!collapsed);
   }, [collapsed]);
 
+  /* Scroll through lyrics with mouse wheel / trackpad */
+  const handleLyricsWheel = useCallback((e: WheelEvent<HTMLElement>) => {
+    if (!lyrics?.synced_lines?.length) return;
+    const totalLines = lyrics.synced_lines.length;
+    const actualCenter = currentLineIndex >= 0 ? currentLineIndex : 0;
+
+    // Accumulate deltaY to tame trackpad's many tiny events
+    scrollAccumRef.current += e.deltaY;
+    const THRESHOLD = 50; // pixels of accumulated scroll per line
+    const lines = Math.trunc(scrollAccumRef.current / THRESHOLD);
+    if (lines === 0) {
+      // Not enough accumulated yet — still schedule the snap-back timer
+      if (scrollResetRef.current) clearTimeout(scrollResetRef.current);
+      scrollResetRef.current = setTimeout(() => {
+        setLyricsScrollOffset(0);
+        scrollAccumRef.current = 0;
+      }, 3000);
+      return;
+    }
+    scrollAccumRef.current -= lines * THRESHOLD;
+
+    setLyricsScrollOffset((prev) => {
+      const next = prev + lines;
+      const minOff = -actualCenter;
+      const maxOff = totalLines - 1 - actualCenter;
+      return Math.max(minOff, Math.min(maxOff, next));
+    });
+
+    // Auto-snap back to current line after 3s of no scrolling
+    if (scrollResetRef.current) clearTimeout(scrollResetRef.current);
+    scrollResetRef.current = setTimeout(() => {
+      setLyricsScrollOffset(0);
+      scrollAccumRef.current = 0;
+    }, 3000);
+  }, [lyrics, currentLineIndex]);
+
   const visibleLines = useMemo(() => {
     if (!lyrics?.synced_lines?.length) return [];
     const lines = lyrics.synced_lines;
     const translations = lyrics.translation_lines;
-    const center = currentLineIndex >= 0 ? currentLineIndex : 0;
+    const actualCenter = currentLineIndex >= 0 ? currentLineIndex : 0;
+    // viewCenter shifts the visible window; style is still based on actualCenter
+    const viewCenter = Math.max(0, Math.min(lines.length - 1, actualCenter + lyricsScrollOffset));
     const result: Array<{
       text: string;
       translation?: string;
       offset: number;
+      viewOffset: number;
       index: number;
+      spacer?: boolean;
     }> = [];
-    const start = Math.max(0, center - HALF);
-    const end = Math.min(lines.length - 1, center + HALF);
-    for (let i = start; i <= end; i++) {
+    // Always produce VISIBLE_LINES entries so the current line stays at slot HALF (center)
+    for (let slot = 0; slot < VISIBLE_LINES; slot++) {
+      const i = viewCenter - HALF + slot;
+      const viewOffset = slot - HALF;
+      if (i < 0 || i >= lines.length) {
+        // Invisible spacer — preserves vertical position of center line
+        result.push({ text: "", offset: Infinity, viewOffset, index: -(slot + 1), spacer: true });
+        continue;
+      }
       const translation = translations?.find(
         (t) => Math.abs(t.time_ms - lines[i].time_ms) < 500
       );
       result.push({
         text: lines[i].text,
         translation: translation?.text,
-        offset: i - center,
+        offset: i - actualCenter, // distance from actual playing line (for is-playing)
+        viewOffset,               // distance from viewport center (for size class)
         index: i,
       });
     }
     return result;
-  }, [lyrics, currentLineIndex]);
+  }, [lyrics, currentLineIndex, lyricsScrollOffset]);
 
   /* Update notification bar */
   const updateBar = updateAvailable ? (
@@ -488,6 +537,15 @@ export default function OverlayApp() {
 
   return (
     <div className="overlay-frame" onMouseDown={handleMouseDown}>
+      {/* SVG filter for AI panel organic edges */}
+      <svg style={{ position: "absolute", width: 0, height: 0 }} aria-hidden="true">
+        <defs>
+          <filter id="rough-edge">
+            <feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="4" seed="3" result="noise" />
+            <feDisplacementMap in="SourceGraphic" in2="noise" scale="20" xChannelSelector="R" yChannelSelector="G" />
+          </filter>
+        </defs>
+      </svg>
       <div className="overlay-brush-frame" style={{ backgroundImage: `url(${frameImg})` }} />
 
       <div className="overlay-content">
@@ -538,7 +596,7 @@ export default function OverlayApp() {
         </div>
 
         {/* Body: lyrics + AI overlay */}
-        <div className="overlay-body">
+        <div className="overlay-body" onWheel={handleLyricsWheel}>
           {/* Lyrics refresh button */}
           <button
             className="overlay-lyrics-refresh"
@@ -569,19 +627,25 @@ export default function OverlayApp() {
             {lyrics?.is_instrumental ? (
               <div className="overlay-no-lyrics">Instrumental</div>
             ) : visibleLines.length > 0 ? (
-              visibleLines.map((line) => (
-                <div
-                  key={line.index}
-                  className={`overlay-lyrics-line ${getLineClass(line.offset)}`}
-                >
-                  {line.text || "..."}
-                  {line.translation && (
-                    <div className="overlay-lyrics-translation">
-                      {line.translation}
-                    </div>
-                  )}
-                </div>
-              ))
+              visibleLines.map((line) =>
+                line.spacer ? (
+                  <div key={line.index} className="overlay-lyrics-line farthest" style={{ visibility: "hidden" }}>
+                    &nbsp;
+                  </div>
+                ) : (
+                  <div
+                    key={line.index}
+                    className={`overlay-lyrics-line ${getLineClass(line.viewOffset)}${line.offset === 0 ? " is-playing" : ""}`}
+                  >
+                    {line.text || "..."}
+                    {line.translation && (
+                      <div className="overlay-lyrics-translation">
+                        {line.translation}
+                      </div>
+                    )}
+                  </div>
+                )
+              )
             ) : lyrics?.plain_lyrics ? (
               <div className="overlay-no-lyrics">
                 {lyrics.plain_lyrics
@@ -601,12 +665,7 @@ export default function OverlayApp() {
           {/* AI panel - full-width overlay on lyrics */}
           {aiVisible && displayedAi && (
             <div className="overlay-ai-section" data-no-drag="true">
-              {aiPanelBgImg && (
-                <div
-                  className="overlay-ai-bg"
-                  style={{ backgroundImage: `url(${aiPanelBgImg})` }}
-                />
-              )}
+              <div className="overlay-ai-bg" />
               <div className="overlay-ai-content" data-no-drag="true">
                 <div className="overlay-ai-text">
                   <Markdown>{displayedAi}</Markdown>
