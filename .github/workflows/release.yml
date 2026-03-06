@@ -58,11 +58,14 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-      - name: Upload universal download name
+      - name: Upload versioned and universal DMG
         run: |
+          VERSION="${{ github.ref_name }}"
           DMG=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | head -1)
           if [ -n "$DMG" ]; then
+            cp "$DMG" "/tmp/Expotify_${VERSION}.dmg"
             cp "$DMG" /tmp/Expotify.dmg
+            gh release upload ${{ github.ref_name }} "/tmp/Expotify_${VERSION}.dmg" --clobber
             gh release upload ${{ github.ref_name }} /tmp/Expotify.dmg --clobber
           fi
         env:
