@@ -6,8 +6,10 @@ use reqwest::{
     Client, RequestBuilder, Response, StatusCode,
 };
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
@@ -54,9 +56,18 @@ fn random_user_agent() -> String {
     )
 }
 
+/// Cached liked status with expiration time.
+struct LikedCacheEntry {
+    liked: bool,
+    expires_at: std::time::Instant,
+}
+
 pub struct SpotifyWebApi {
     client: Client,
     auth: Arc<SpotifyAuth>,
+    /// Cache of track_id → liked status with TTL.
+    /// Populated on first check per track, updated on like/unlike.
+    liked_cache: RwLock<HashMap<String, LikedCacheEntry>>,
 }
 
 impl SpotifyWebApi {
@@ -89,7 +100,11 @@ impl SpotifyWebApi {
                     .unwrap_or_else(|_| Client::new())
             });
 
-        Self { client, auth }
+        Self {
+            client,
+            auth,
+            liked_cache: RwLock::new(HashMap::new()),
+        }
     }
 
     // ── Public API ──────────────────────────────────────────────────────
@@ -147,18 +162,50 @@ impl SpotifyWebApi {
         Ok(results)
     }
 
-    /// Check if a track is in the user's liked songs via GraphQL.
+    /// Check if a track is in the user's liked songs.
+    /// Uses a per-track cache with 30-second TTL: first call does a comprehensive
+    /// GraphQL scan (limit=500), subsequent calls return the cached result.
+    /// Cache is also updated immediately on like/unlike operations.
     pub async fn is_track_liked(&self, track_id: &str) -> Result<bool> {
-        // NOTE: spclient /collection/v2/contains returns 405 — use GraphQL directly.
-        self.is_track_liked_graphql(track_id).await
+        // Fast path: return cached result if not expired
+        {
+            let cache = self.liked_cache.read().await;
+            if let Some(entry) = cache.get(track_id) {
+                if entry.expires_at > std::time::Instant::now() {
+                    return Ok(entry.liked);
+                }
+            }
+        }
+
+        // Cache miss or expired: scan library
+        log::info!(
+            "[spotify_webapi] is_track_liked: checking {} (cache miss/expired)",
+            track_id
+        );
+        let liked = self.is_track_liked_graphql(track_id).await?;
+
+        // Store in cache with 30-second TTL
+        {
+            let mut cache = self.liked_cache.write().await;
+            cache.insert(
+                track_id.to_string(),
+                LikedCacheEntry {
+                    liked,
+                    expires_at: std::time::Instant::now() + Duration::from_secs(30),
+                },
+            );
+        }
+
+        Ok(liked)
     }
 
-    /// Fallback: check liked status via GraphQL (scans most recent 50 liked tracks).
+    /// Check liked status via GraphQL. Uses a high limit to cover the full library in one request.
+    /// The API only returns as many items as exist, so this won't over-fetch.
     async fn is_track_liked_graphql(&self, track_id: &str) -> Result<bool> {
         let target_uri = format!("spotify:track:{}", track_id);
         let variables = serde_json::json!({
             "offset": 0,
-            "limit": 50
+            "limit": 5000
         });
         let variables_str = variables.to_string();
         let extensions = serde_json::json!({
@@ -216,8 +263,16 @@ impl SpotifyWebApi {
 
     /// Add a track to liked songs via GraphQL.
     pub async fn like_track(&self, track_id: &str) -> Result<()> {
-        // NOTE: spclient /collection/v2/save returns 404 — use GraphQL directly.
-        self.like_track_graphql(track_id).await
+        self.like_track_graphql(track_id).await?;
+        // Update cache with longer TTL (user just acted, trust the result)
+        self.liked_cache.write().await.insert(
+            track_id.to_string(),
+            LikedCacheEntry {
+                liked: true,
+                expires_at: std::time::Instant::now() + Duration::from_secs(60),
+            },
+        );
+        Ok(())
     }
 
     /// Fallback: add to library via GraphQL mutation.
@@ -256,8 +311,16 @@ impl SpotifyWebApi {
 
     /// Remove a track from liked songs via GraphQL.
     pub async fn unlike_track(&self, track_id: &str) -> Result<()> {
-        // NOTE: spclient /collection/v2/remove returns 404 — use GraphQL directly.
-        self.unlike_track_graphql(track_id).await
+        self.unlike_track_graphql(track_id).await?;
+        // Update cache with longer TTL (user just acted, trust the result)
+        self.liked_cache.write().await.insert(
+            track_id.to_string(),
+            LikedCacheEntry {
+                liked: false,
+                expires_at: std::time::Instant::now() + Duration::from_secs(60),
+            },
+        );
+        Ok(())
     }
 
     /// Fallback: remove from library via GraphQL mutation.

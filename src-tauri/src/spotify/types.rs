@@ -18,3 +18,25 @@ pub struct TrackInfo {
     #[serde(default)]
     pub ai_used_web_search: bool,
 }
+
+/// Search result from Spotify Web API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub album_art_url: Option<String>,
+    pub duration_ms: u64,
+    pub uri: String,
+}
+
+/// Spotify Connect device
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpotifyDevice {
+    pub id: String,
+    pub name: String,
+    pub device_type: String,
+    pub is_active: bool,
+    pub volume_percent: Option<u32>,
+}

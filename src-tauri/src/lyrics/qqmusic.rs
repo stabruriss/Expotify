@@ -72,11 +72,7 @@ impl QQMusicClient {
         Self { client }
     }
 
-    pub async fn fetch_lyrics(
-        &self,
-        track_name: &str,
-        artist: &str,
-    ) -> Result<Option<LyricsInfo>> {
+    pub async fn fetch_lyrics(&self, track_name: &str, artist: &str) -> Result<Option<LyricsInfo>> {
         let songmid = self.search_song(track_name, artist).await?;
         let Some(songmid) = songmid else {
             return Ok(None);
@@ -183,8 +179,8 @@ impl QQMusicClient {
         // Defensively strip JSONP wrapper if present
         let json_str = strip_jsonp(&body);
 
-        let data: QQLyricResponse = serde_json::from_str(json_str)
-            .context("Failed to parse QQ Music lyrics response")?;
+        let data: QQLyricResponse =
+            serde_json::from_str(json_str).context("Failed to parse QQ Music lyrics response")?;
 
         if data.retcode.unwrap_or(-1) != 0 {
             return Ok(None);

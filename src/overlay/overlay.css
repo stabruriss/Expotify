@@ -224,7 +224,7 @@ html, body, #root {
 .overlay-track-name {
   font-size: 20px;
   font-weight: 600;
-  color: #227D51;
+  color: rgba(254,223,225,0.75);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -233,7 +233,7 @@ html, body, #root {
 .overlay-track-artist {
   font-size: 15px;
   font-weight: 400;
-  color: rgba(34,125,81,0.50);
+  color: rgba(254,223,225,0.40);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -330,6 +330,90 @@ html, body, #root {
   50% { opacity: 0.3; box-shadow: 0 0 2px rgba(254,223,225,0.2); }
 }
 
+/* ============ Control Bar (volume + action buttons, always visible) ============ */
+
+.overlay-control-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 4px;
+  margin-bottom: 2px;
+}
+
+.overlay-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 40%;
+  flex-shrink: 0;
+}
+
+.overlay-volume-icon {
+  color: rgba(34,125,81,0.35);
+  flex-shrink: 0;
+}
+
+.overlay-volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: rgba(34,125,81,0.12);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.overlay-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(34,125,81,0.50);
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+}
+
+.overlay-volume-slider::-webkit-slider-thumb:hover {
+  background: rgba(34,125,81,0.80);
+  transform: scale(1.3);
+}
+
+/* Control bar action buttons (always visible) */
+.overlay-control-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.overlay-ctrl-btn {
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.40);
+  cursor: pointer;
+  padding: 3px;
+  transition: color 0.2s, transform 0.15s;
+  line-height: 0;
+}
+
+.overlay-ctrl-btn:hover {
+  color: rgba(254,223,225,0.80);
+  transform: scale(1.15);
+}
+
+.overlay-ctrl-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
+.overlay-ctrl-btn.liked {
+  color: #9F353A;
+}
+
 /* ============ Body ============ */
 
 .overlay-body {
@@ -405,38 +489,46 @@ html, body, #root {
   padding: 10px 0;
 }
 
-/* ============ Lyrics Refresh Button ============ */
+/* ============ Button Group ============ */
 
-.overlay-lyrics-refresh {
+.overlay-btn-group {
   position: absolute;
   bottom: 2px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.overlay-action-btn {
   background: none;
   border: none;
   color: rgba(34,125,81,0);
   cursor: pointer;
   padding: 4px;
-  transition: color 0.2s;
+  transition: color 0.2s, transform 0.15s;
   line-height: 0;
-  pointer-events: auto;
 }
 
-.overlay-body:hover .overlay-lyrics-refresh {
+.overlay-body:hover .overlay-action-btn {
   color: rgba(34,125,81,0.30);
 }
 
-.overlay-lyrics-refresh:hover {
+.overlay-action-btn:hover {
   color: rgba(34,125,81,0.70) !important;
+  transform: scale(1.15);
 }
 
-.overlay-lyrics-refresh:disabled {
+.overlay-action-btn:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+  transform: none;
 }
 
-.overlay-lyrics-refresh .spinning {
+.overlay-action-btn .spinning {
   animation: refresh-spin 1s linear infinite;
 }
 
@@ -445,22 +537,21 @@ html, body, #root {
   to { transform: rotate(360deg); }
 }
 
-/* ============ AI Panel (full-width overlay) ============ */
+/* ============ Unified Panel (full-width overlay on body) ============ */
 
-.overlay-ai-section {
+.overlay-panel {
   position: absolute;
   inset: 0;
   z-index: 5;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   padding: 8px 12px;
   background: transparent;
   pointer-events: auto;
 }
 
-/* AI panel background — solid dark with organic displaced edges, rasterized to prevent scroll-triggered repaints */
-.overlay-ai-bg {
+/* Panel background — solid dark with organic displaced edges */
+.overlay-panel-bg {
   position: absolute;
   inset: -6px;
   background: #1C1C1C;
@@ -472,12 +563,32 @@ html, body, #root {
   backface-visibility: hidden;
 }
 
-@keyframes ai-fade-in {
+/* Panel close button (top-right corner) */
+.overlay-panel-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.25);
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 0;
+  transition: color 0.2s, transform 0.15s;
+}
+
+.overlay-panel-close:hover {
+  color: rgba(254,223,225,0.65);
+  transform: scale(1.2);
+}
+
+@keyframes panel-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
-.overlay-ai-content {
+.overlay-panel-content {
   position: relative;
   z-index: 1;
   background: none;
@@ -485,18 +596,90 @@ html, body, #root {
   border-radius: 0;
   padding: 4px 4px;
   text-align: left;
-  max-height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  animation: ai-fade-in 0.35s ease-out;
+  animation: panel-fade-in 0.35s ease-out;
 }
 
-.overlay-ai-content::-webkit-scrollbar {
+.overlay-panel-content::-webkit-scrollbar {
   width: 3px;
 }
 
-.overlay-ai-content::-webkit-scrollbar-thumb {
+.overlay-panel-content::-webkit-scrollbar-thumb {
   background: rgba(254,223,225,0.12);
   border-radius: 2px;
+}
+
+/* TTS volume slider (next to read-aloud) */
+.overlay-tts-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  margin-left: 8px;
+  color: rgba(254,223,225,0.35);
+  vertical-align: middle;
+}
+
+.overlay-tts-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 60px;
+  height: 2px;
+  background: rgba(254,223,225,0.15);
+  border-radius: 1px;
+  outline: none;
+  cursor: pointer;
+}
+
+.overlay-tts-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(254,223,225,0.45);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.overlay-tts-slider::-webkit-slider-thumb:hover {
+  background: rgba(254,223,225,0.80);
+}
+
+/* AI panel read-aloud button */
+.overlay-ai-read-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid rgba(254,223,225,0.25);
+  color: rgba(254,223,225,0.55);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  margin-bottom: 6px;
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.overlay-ai-read-btn:hover {
+  background: rgba(254,223,225,0.08);
+  border-color: rgba(254,223,225,0.45);
+  color: rgba(254,223,225,0.80);
+}
+
+.overlay-ai-read-btn.reading {
+  background: rgba(254,223,225,0.15);
+  border-color: rgba(254,223,225,0.40);
+  color: #FEDFE1;
+}
+
+.overlay-ai-read-btn.reading:hover {
+  background: rgba(254,223,225,0.22);
 }
 
 .overlay-ai-text {
@@ -535,7 +718,7 @@ html, body, #root {
   transition: opacity 0.2s;
 }
 
-.overlay-ai-content:hover .overlay-ai-footer {
+.overlay-panel-content:hover .overlay-ai-footer {
   opacity: 1;
 }
 
@@ -679,6 +862,51 @@ html, body, #root {
     transparent 100%);
 }
 
+/* ============ Quill Writing Animation (AI Fetching) ============ */
+
+.overlay-pen-writing {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.quill-img {
+  width: 75%;
+  height: 75%;
+  object-fit: contain;
+  animation: quill-write 2s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px rgba(254,223,225,0.35));
+}
+
+@keyframes quill-write {
+  0%   { transform: translate(0px, 0px) rotate(0deg); }
+  20%  { transform: translate(2px, 1px) rotate(-2deg); }
+  40%  { transform: translate(-1px, -1px) rotate(1.5deg); }
+  60%  { transform: translate(3px, 0px) rotate(-1deg); }
+  80%  { transform: translate(-2px, 1px) rotate(2deg); }
+  100% { transform: translate(0px, 0px) rotate(0deg); }
+}
+
+/* ============ Read-Aloud Active State ============ */
+
+.overlay-cover-btn.reading-active {
+  background: radial-gradient(circle at 35% 35%,
+    rgba(254,223,225,0.40) 0%,
+    rgba(254,223,225,0.15) 60%,
+    transparent 100%);
+}
+
+.overlay-cover-btn.reading-active:hover {
+  background: radial-gradient(circle at 35% 35%,
+    rgba(254,223,225,0.60) 0%,
+    rgba(254,223,225,0.30) 60%,
+    transparent 100%);
+}
+
 /* ============ Compact Layout ============ */
 
 .overlay-collapsed {
@@ -694,6 +922,414 @@ html, body, #root {
 
 .overlay-collapsed .overlay-cover-area:hover .overlay-cover-btn {
   opacity: 1;
+}
+
+/* ============ Collapsed Chat ============ */
+
+.overlay-collapsed-ai-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%,
+    rgba(254,223,225,0.50) 0%,
+    rgba(254,223,225,0.20) 60%,
+    transparent 100%);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.25s, transform 0.2s;
+  color: rgba(254,223,225,0.90);
+}
+
+.overlay-compact-content:hover .overlay-collapsed-ai-btn {
+  opacity: 1;
+}
+
+.overlay-collapsed-ai-btn:hover {
+  opacity: 1 !important;
+  transform: translate(-50%, -50%) scale(1.2);
+  background: radial-gradient(circle at 40% 35%,
+    rgba(254,223,225,0.70) 0%,
+    rgba(254,223,225,0.35) 60%,
+    transparent 100%);
+}
+
+.overlay-collapsed-chat {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 4px;
+  width: 100%;
+}
+
+.overlay-collapsed-chat-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(20,20,20,0.95);
+  border: 1px solid rgba(254,223,225,0.20);
+  border-radius: 6px;
+  color: rgba(254,223,225,0.85);
+  padding: 5px 10px;
+  font-size: 14px;
+  outline: none;
+  font-family: inherit;
+}
+
+.overlay-collapsed-chat-input:focus {
+  border-color: rgba(254,223,225,0.35);
+}
+
+.overlay-collapsed-chat-input::placeholder {
+  color: rgba(254,223,225,0.25);
+}
+
+.overlay-collapsed-chat-input:disabled {
+  opacity: 0.5;
+}
+
+.overlay-collapsed-chat-send {
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.35);
+  cursor: pointer;
+  padding: 2px;
+  line-height: 0;
+  transition: color 0.2s;
+  flex-shrink: 0;
+}
+
+.overlay-collapsed-chat-send:hover:not(:disabled) {
+  color: rgba(254,223,225,0.70);
+}
+
+.overlay-collapsed-chat-send:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ============ Agent Chat ============ */
+
+.agent-chat {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.agent-chat-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid rgba(254,223,225,0.10);
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.agent-chat-title {
+  font-size: 17px;
+  font-weight: 500;
+  color: rgba(254,223,225,0.55);
+  letter-spacing: 0.5px;
+}
+
+.agent-chat-header-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.agent-chat-read-toggle {
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.25);
+  cursor: pointer;
+  padding: 2px;
+  line-height: 0;
+  transition: color 0.2s;
+}
+
+.agent-chat-read-toggle:hover {
+  color: rgba(254,223,225,0.60);
+}
+
+.agent-chat-read-toggle.active {
+  color: #FEDFE1;
+}
+
+.agent-chat-reset {
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.30);
+  cursor: pointer;
+  padding: 2px;
+  line-height: 0;
+  transition: color 0.2s;
+}
+
+.agent-chat-reset:hover {
+  color: rgba(254,223,225,0.70);
+}
+
+.agent-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(254,223,225,0.15) transparent;
+}
+
+.agent-chat-messages::-webkit-scrollbar {
+  width: 3px;
+}
+
+.agent-chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(254,223,225,0.15);
+  border-radius: 2px;
+}
+
+.agent-chat-empty {
+  text-align: center;
+  color: rgba(254,223,225,0.25);
+  font-size: 17px;
+  padding: 20px 8px;
+  line-height: 1.5;
+}
+
+.agent-chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.agent-chat-msg.user {
+  align-items: flex-end;
+}
+
+.agent-chat-msg.user .agent-chat-text {
+  background: rgba(254,223,225,0.12);
+  color: rgba(254,223,225,0.80);
+  border-radius: 8px 8px 2px 8px;
+  padding: 4px 10px;
+  font-size: 18px;
+  max-width: 85%;
+  word-wrap: break-word;
+}
+
+.agent-chat-msg.assistant .agent-chat-text {
+  background: rgba(254,223,225,0.08);
+  color: rgba(254,223,225,0.75);
+  border-radius: 8px 8px 8px 2px;
+  padding: 4px 10px;
+  font-size: 18px;
+  max-width: 85%;
+  word-wrap: break-word;
+}
+
+.agent-chat-msg.system .agent-chat-text {
+  color: rgba(254,223,225,0.45);
+  font-size: 15px;
+  font-style: italic;
+  text-align: center;
+  width: 100%;
+}
+
+.agent-chat-label {
+  font-size: 14px;
+  color: rgba(254,223,225,0.35);
+  letter-spacing: 0.3px;
+}
+
+.agent-chat-action {
+  display: inline-block;
+  font-size: 14px;
+  color: rgba(254,223,225,0.40);
+  border: 1px solid rgba(254,223,225,0.12);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-bottom: 2px;
+  align-self: flex-start;
+}
+
+.agent-chat-loading-dots::after {
+  content: "";
+  animation: loading-dots 1.2s steps(4, end) infinite;
+}
+
+@keyframes loading-dots {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+}
+
+.agent-chat-input-row {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(254,223,225,0.10);
+  flex-shrink: 0;
+}
+
+.agent-chat-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(254,223,225,0.06);
+  border: 1px solid rgba(254,223,225,0.12);
+  border-radius: 6px;
+  color: rgba(254,223,225,0.80);
+  padding: 5px 10px;
+  font-size: 18px;
+  outline: none;
+  font-family: inherit;
+}
+
+.agent-chat-input:focus {
+  border-color: rgba(254,223,225,0.30);
+}
+
+.agent-chat-input::placeholder {
+  color: rgba(254,223,225,0.25);
+}
+
+.agent-chat-input:disabled {
+  opacity: 0.5;
+}
+
+.agent-chat-send {
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.35);
+  cursor: pointer;
+  padding: 4px;
+  line-height: 0;
+  transition: color 0.2s;
+}
+
+.agent-chat-send:hover:not(:disabled) {
+  color: rgba(254,223,225,0.70);
+}
+
+.agent-chat-send:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.agent-chat-stop {
+  background: none;
+  border: none;
+  color: rgba(255,120,120,0.70);
+  cursor: pointer;
+  padding: 4px;
+  line-height: 0;
+  transition: color 0.2s;
+}
+
+.agent-chat-stop:hover {
+  color: rgba(255,120,120,1.0);
+}
+
+/* ============ Device Picker ============ */
+
+.device-picker {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.device-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid rgba(254,223,225,0.10);
+  font-size: 17px;
+  font-weight: 500;
+  color: rgba(254,223,225,0.55);
+  flex-shrink: 0;
+}
+
+.device-picker-list {
+  flex: 1;
+  padding: 4px 0;
+  overflow-y: auto;
+}
+
+.device-picker-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 17px;
+  color: rgba(254,223,225,0.30);
+  line-height: 1.6;
+}
+
+.device-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: rgba(254,223,225,0.55);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.device-picker-item:hover:not(:disabled) {
+  background: rgba(254,223,225,0.08);
+}
+
+.device-picker-item.active {
+  color: #FEDFE1;
+  cursor: default;
+}
+
+.device-picker-item:disabled {
+  opacity: 0.5;
+}
+
+.device-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.device-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-active-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #FEDFE1;
+  flex-shrink: 0;
+  box-shadow: 0 0 4px rgba(254,223,225,0.5);
+}
+
+.device-transferring {
+  font-size: 10px;
+  color: rgba(254,223,225,0.40);
 }
 
 /* ============ States ============ */

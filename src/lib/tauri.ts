@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { TrackInfo, Settings, AuthStatus, LyricsInfo } from "../types";
+import type { TrackInfo, Settings, AuthStatus, LyricsInfo, SearchResult, SpotifyDevice, ChatMessage, AgentChatResult } from "../types";
 
 // ============ Spotify Status ============
 
@@ -45,6 +45,20 @@ export async function spotifyPreviousTrack(): Promise<void> {
   return invoke("spotify_previous_track");
 }
 
+export async function spotifyPause(): Promise<void> {
+  return invoke("spotify_pause");
+}
+
+export async function spotifyPlay(): Promise<void> {
+  return invoke("spotify_play");
+}
+
+// ============ TTS ============
+
+export async function ttsSynthesize(text: string): Promise<string> {
+  return invoke("tts_synthesize", { text });
+}
+
 // ============ Settings ============
 
 export async function getSettings(): Promise<Settings> {
@@ -59,6 +73,16 @@ export async function updateSettings(settings: Settings): Promise<void> {
 
 export async function getAuthStatus(): Promise<AuthStatus> {
   return invoke("get_auth_status");
+}
+
+// ============ Anthropic ============
+
+export async function anthropicActivate(): Promise<void> {
+  return invoke("anthropic_activate");
+}
+
+export async function anthropicDeactivate(): Promise<void> {
+  return invoke("anthropic_deactivate");
 }
 
 // ============ Window Commands ============
@@ -99,6 +123,70 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
 
 export async function openUrl(url: string): Promise<void> {
   return invoke("open_url", { url });
+}
+
+// ============ Spotify Web API ============
+
+export async function spotifyIsAuthenticated(): Promise<boolean> {
+  return invoke("spotify_is_authenticated");
+}
+
+export async function spotifyConnect(spDc: string): Promise<void> {
+  return invoke("spotify_connect", { spDc });
+}
+
+export async function spotifyLogin(): Promise<void> {
+  return invoke("spotify_login");
+}
+
+export async function spotifyDisconnect(): Promise<void> {
+  return invoke("spotify_disconnect");
+}
+
+export async function spotifySearch(query: string, limit?: number): Promise<SearchResult[]> {
+  return invoke("spotify_search", { query, limit });
+}
+
+export async function spotifyIsTrackLiked(trackId: string): Promise<boolean> {
+  return invoke("spotify_is_track_liked", { trackId });
+}
+
+export async function spotifyLikeTrack(trackId: string): Promise<void> {
+  return invoke("spotify_like_track", { trackId });
+}
+
+export async function spotifyUnlikeTrack(trackId: string): Promise<void> {
+  return invoke("spotify_unlike_track", { trackId });
+}
+
+export async function spotifyShuffleLiked(): Promise<void> {
+  return invoke("spotify_shuffle_liked");
+}
+
+export async function spotifyGetDevices(): Promise<SpotifyDevice[]> {
+  return invoke("spotify_get_devices");
+}
+
+export async function spotifyTransferPlayback(deviceId: string): Promise<void> {
+  return invoke("spotify_transfer_playback", { deviceId });
+}
+
+export async function spotifyGetVolume(): Promise<number> {
+  return invoke("spotify_get_volume");
+}
+
+export async function spotifySetVolume(volume: number): Promise<void> {
+  return invoke("spotify_set_volume", { volume });
+}
+
+export async function spotifyPlayTrack(uri: string): Promise<void> {
+  return invoke("spotify_play_track", { uri });
+}
+
+// ============ Agent Chat ============
+
+export async function agentChat(messages: ChatMessage[]): Promise<AgentChatResult> {
+  return invoke("agent_chat", { messages });
 }
 
 // ============ Lyrics ============

@@ -1,17 +1,44 @@
-import { useState, useMemo, useEffect, useCallback, useRef, type PointerEvent, type MouseEvent, type WheelEvent } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, type PointerEvent, type MouseEvent, type WheelEvent, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
 import { useTrack } from "../hooks/useTrack";
 import { useLyrics } from "../hooks/useLyrics";
-import { getAuthStatus, showMainWindow, saveOverlayGeometry, spotifyPlayPause, spotifyNextTrack, spotifyPreviousTrack } from "../lib/tauri";
+import { useReadAloud } from "../hooks/useReadAloud";
+import { useLikeTrack } from "../hooks/useLikeTrack";
+import { useAgentChat } from "../hooks/useAgentChat";
+import { getAuthStatus, showMainWindow, saveOverlayGeometry, spotifyPlayPause, spotifyNextTrack, spotifyPreviousTrack, spotifyGetVolume, spotifySetVolume, spotifyShuffleLiked, spotifyPause, spotifyPlay, ttsSynthesize, getSettings, updateSettings } from "../lib/tauri";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
+import { DevicePicker } from "../components/DevicePicker";
+import { AgentChat } from "../components/AgentChat";
 import frameImg from "./assets/frame.png";
 import "./overlay.css";
 
 /* Try to import generated assets; fall back gracefully */
 let aiStampImg: string | undefined;
 try { aiStampImg = new URL("./assets/ai-stamp.png", import.meta.url).href; } catch {}
+let aiChatBtnImg: string | undefined;
+try { aiChatBtnImg = new URL("./assets/ai-chat-btn.png", import.meta.url).href; } catch {}
+
+/** Strip markdown formatting for natural TTS reading. */
+function stripMarkdown(md: string): string {
+  return md
+    .replace(/#{1,6}\s*/g, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/_(.+?)_/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/\[(.+?)\]\(.+?\)/g, "$1")
+    .replace(/!\[.*?\]\(.+?\)/g, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .replace(/^>\s*/gm, "")
+    .replace(/---+/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 const VISIBLE_LINES = 7;
 const HALF = Math.floor(VISIBLE_LINES / 2);
@@ -37,8 +64,31 @@ function isInteractiveTarget(target: HTMLElement): boolean {
 }
 
 export default function OverlayApp() {
+  // Settings sync from main window via localStorage
+  const [autoAiEnabled, setAutoAiEnabled] = useState(
+    () => localStorage.getItem("expotify_settings_ai_auto") === "true"
+  );
+  const [readAloudEnabled, setReadAloudEnabled] = useState(
+    () => localStorage.getItem("expotify_settings_ai_read_aloud") === "true"
+  );
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "expotify_settings_ai_auto") {
+        setAutoAiEnabled(e.newValue === "true");
+      }
+      if (e.key === "expotify_settings_ai_read_aloud") {
+        setReadAloudEnabled(e.newValue === "true");
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const isReadAloudActive = autoAiEnabled && readAloudEnabled;
+
   const { track, aiLoading, aiError, regenCooldown, spotifyRunning, fetchAi } = useTrack({
-    pollInterval: 3,
+    pollInterval: isReadAloudActive ? 1 : 3,
     autoAi: false,
   });
   const { lyrics, currentLineIndex, loading: lyricsLoading, refetchLyrics } = useLyrics({ track });
@@ -48,11 +98,21 @@ export default function OverlayApp() {
   const [collapsed, setCollapsed] = useState(false);
   const collapsedRef = useRef(false);
   const expandedGeoRef = useRef({ width: 420, height: 268 });
+  const expandingRef = useRef(false);
 
-  const [aiVisible, setAiVisible] = useState(false);
+  type PanelType = "ai" | "chat" | "device" | null;
+  const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [cachedAi, setCachedAi] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [spotifyAuthed, setSpotifyAuthed] = useState(false);
+  const [shuffleLoading, setShuffleLoading] = useState(false);
   const [lyricsScrollOffset, setLyricsScrollOffset] = useState(0);
+  const [spotifyVolume, setSpotifyVolume] = useState<number | null>(null);
+  const [ttsVolume, setTtsVolume] = useState(() => {
+    const stored = localStorage.getItem("expotify_settings_tts_volume");
+    return stored ? parseFloat(stored) : 0.8;
+  });
+  const volumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollAccumRef = useRef(0);
@@ -164,12 +224,63 @@ export default function OverlayApp() {
   useEffect(() => {
     const checkAuth = () => {
       getAuthStatus()
-        .then((status) => setIsAuthenticated(status.openai))
+        .then((status) => {
+          setIsAuthenticated(status.openai || status.anthropic);
+          setSpotifyAuthed(status.spotify);
+        })
         .catch(() => {});
     };
     checkAuth();
     const interval = setInterval(checkAuth, 10000);
     return () => clearInterval(interval);
+  }, []);
+
+  const volumeChangedRef = useRef(0);
+
+  // Poll Spotify volume periodically (skip if user recently changed it)
+  useEffect(() => {
+    if (!spotifyRunning) return;
+    const fetchVol = () => {
+      if (Date.now() - volumeChangedRef.current < 2000) return;
+      spotifyGetVolume()
+        .then((vol) => setSpotifyVolume(vol))
+        .catch(() => {});
+    };
+    fetchVol();
+    const interval = setInterval(fetchVol, 5000);
+    return () => clearInterval(interval);
+  }, [spotifyRunning]);
+
+  // Sync TTS volume from main window via localStorage
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "expotify_settings_tts_volume" && e.newValue) {
+        setTtsVolume(parseFloat(e.newValue));
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const handleSpotifyVolumeChange = useCallback((vol: number) => {
+    setSpotifyVolume(vol);
+    volumeChangedRef.current = Date.now();
+    if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current);
+    volumeTimerRef.current = setTimeout(() => {
+      spotifySetVolume(vol).catch(() => {});
+    }, 100);
+  }, []);
+
+  const handleTtsVolumeChange = useCallback((vol: number) => {
+    setTtsVolume(vol);
+    localStorage.setItem("expotify_settings_tts_volume", String(vol));
+    // Persist to settings file (debounced)
+    if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current);
+    volumeTimerRef.current = setTimeout(() => {
+      getSettings().then((s) => {
+        updateSettings({ ...s, tts_volume: vol }).catch(() => {});
+      }).catch(() => {});
+    }, 500);
   }, []);
 
   // If AI error indicates auth issue, open main window for login
@@ -198,7 +309,7 @@ export default function OverlayApp() {
     if (track?.ai_description && track.id) {
       localStorage.setItem(`ai_insight_${track.id}`, track.ai_description);
       setCachedAi(track.ai_description);
-      setAiVisible(true);
+      setActivePanel("ai");
     }
   }, [track?.ai_description]);
 
@@ -215,19 +326,273 @@ export default function OverlayApp() {
 
   const displayedAi = track?.ai_description ?? cachedAi;
 
+  // Collapsed mode chat input
+  const [collapsedChatOpen, setCollapsedChatOpen] = useState(false);
+  const [collapsedChatInput, setCollapsedChatInput] = useState("");
+  const collapsedInputRef = useRef<HTMLInputElement>(null);
+  const likeChangedRef = useRef<() => void>(() => {});
+  const { entries: chatEntries, sendMessage: chatSendMessage, loading: chatLoading, reset: chatReset, cancel: chatCancel } = useAgentChat({
+    onLikeChanged: () => likeChangedRef.current(),
+  });
+
+  // Resize window when collapsed chat opens/closes (keep cover in place)
+  useEffect(() => {
+    if (!collapsed || expandingRef.current) return;
+    const win = getCurrentWindow();
+    const CHAT_W = 180;
+    const CHAT_H = 110;
+    if (collapsedChatOpen) {
+      const resize = async () => {
+        await win.setMinSize(new LogicalSize(CHAT_W, CHAT_H));
+        // Check screen bounds — keep cover at same position
+        try {
+          const sf = await win.scaleFactor();
+          const pos = await win.outerPosition();
+          const x = pos.x / sf;
+          const y = pos.y / sf;
+          const screenW = window.screen.availWidth;
+          const screenH = window.screen.availHeight;
+          let newX = x;
+          let newY = y;
+          if (x + CHAT_W > screenW) newX = screenW - CHAT_W;
+          if (y + CHAT_H > screenH) newY = screenH - CHAT_H;
+          if (newX < 0) newX = 0;
+          if (newY < 0) newY = 0;
+          if (newX !== x || newY !== y) {
+            await win.setPosition(new LogicalPosition(newX, newY));
+          }
+        } catch {}
+        await win.setSize(new LogicalSize(CHAT_W, CHAT_H));
+        setTimeout(() => collapsedInputRef.current?.focus(), 150);
+      };
+      resize();
+    } else {
+      win.setMinSize(new LogicalSize(72, 72)).then(() =>
+        win.setSize(new LogicalSize(72, 72))
+      );
+    }
+  }, [collapsed, collapsedChatOpen]);
+
+  // ===== Chat TTS (read-aloud for agent chat responses) =====
+  const [chatReadEnabled, setChatReadEnabled] = useState(
+    () => localStorage.getItem("expotify_chat_read_enabled") === "true"
+  );
+  const [chatTtsSpeaking, setChatTtsSpeaking] = useState(false);
+  const [chatTtsPaused, setChatTtsPaused] = useState(false);
+  const chatTtsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const chatTtsBlobUrlRef = useRef<string | null>(null);
+  const lastChatSpokenIdRef = useRef(0);
+  const chatTtsSessionRef = useRef(0);
+  const chatTtsQueueRef = useRef<string[]>([]);
+  const chatTtsPlayingRef = useRef(false);
+  const isReadingRef = useRef(false);
+  const ttsVolumeRef = useRef(ttsVolume);
+
+  const cleanupChatTts = useCallback(() => {
+    if (chatTtsAudioRef.current) {
+      chatTtsAudioRef.current.pause();
+      chatTtsAudioRef.current.src = "";
+      chatTtsAudioRef.current = null;
+    }
+    if (chatTtsBlobUrlRef.current) {
+      URL.revokeObjectURL(chatTtsBlobUrlRef.current);
+      chatTtsBlobUrlRef.current = null;
+    }
+  }, []);
+
+  const skipChatTts = useCallback(() => {
+    chatTtsSessionRef.current++;
+    chatTtsQueueRef.current = [];
+    chatTtsPlayingRef.current = false;
+    cleanupChatTts();
+    setChatTtsSpeaking(false);
+    setChatTtsPaused(false);
+    spotifyPlay().catch(() => {});
+  }, [cleanupChatTts]);
+
+  const toggleChatTtsPause = useCallback(() => {
+    const audio = chatTtsAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      audio.play();
+      setChatTtsPaused(false);
+    } else {
+      audio.pause();
+      setChatTtsPaused(true);
+    }
+  }, []);
+
+  const toggleChatRead = useCallback(() => {
+    const next = !chatReadEnabled;
+    setChatReadEnabled(next);
+    localStorage.setItem("expotify_chat_read_enabled", String(next));
+    if (!next) skipChatTts();
+  }, [chatReadEnabled, skipChatTts]);
+
+  // Apply volume changes to active chat TTS audio
+  useEffect(() => {
+    if (chatTtsAudioRef.current) {
+      chatTtsAudioRef.current.volume = ttsVolume;
+    }
+  }, [ttsVolume]);
+
+  // Cleanup chat TTS on unmount
+  useEffect(() => {
+    return () => { cleanupChatTts(); };
+  }, [cleanupChatTts]);
+
+  // Read-aloud orchestration
+  const { phase: readAloudPhase, skipReadAloud, toggleSpeechPause, speechPaused, toggleManualRead, isAutoTriggered } = useReadAloud({
+    enabled: isReadAloudActive,
+    track,
+    displayedAi,
+    aiLoading,
+    fetchAi,
+    ttsVolume,
+  });
+  const isReading = readAloudPhase !== "idle";
+  const isAnySpeaking = isReading || chatTtsSpeaking;
+  const prevReadingRef = useRef(false);
+
+  // Keep refs in sync for use inside async closures
+  isReadingRef.current = isReading;
+  ttsVolumeRef.current = ttsVolume;
+
+  // Process chat TTS queue — speaks items one by one, resumes Spotify when done
+  const processQueue = useCallback(async () => {
+    if (chatTtsPlayingRef.current) return; // already processing
+    if (chatTtsQueueRef.current.length === 0) return;
+    if (isReadingRef.current) return; // wait for AI insight to finish
+
+    chatTtsPlayingRef.current = true;
+    const session = ++chatTtsSessionRef.current;
+    setChatTtsSpeaking(true);
+    setChatTtsPaused(false);
+
+    // Pause Spotify before starting the queue
+    try { await spotifyPause(); } catch {}
+    if (chatTtsSessionRef.current !== session) return;
+
+    while (chatTtsQueueRef.current.length > 0) {
+      if (chatTtsSessionRef.current !== session) return;
+      // If AI insight started reading, pause queue processing
+      if (isReadingRef.current) break;
+
+      const rawText = chatTtsQueueRef.current.shift()!;
+      const text = stripMarkdown(rawText);
+
+      try {
+        const base64Audio = await ttsSynthesize(text);
+        if (chatTtsSessionRef.current !== session) return;
+
+        const binaryStr = atob(base64Audio);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: "audio/mp3" });
+        const url = URL.createObjectURL(blob);
+        if (chatTtsBlobUrlRef.current) URL.revokeObjectURL(chatTtsBlobUrlRef.current);
+        chatTtsBlobUrlRef.current = url;
+
+        await new Promise<void>((resolve, reject) => {
+          if (chatTtsSessionRef.current !== session) { resolve(); return; }
+          const audio = new Audio(url);
+          audio.volume = ttsVolumeRef.current;
+          chatTtsAudioRef.current = audio;
+          audio.onended = () => resolve();
+          audio.onerror = (e) => reject(e);
+          audio.play().catch(reject);
+        });
+      } catch (e) {
+        console.error("Chat TTS error:", e);
+      }
+
+      if (chatTtsSessionRef.current !== session) return;
+      cleanupChatTts();
+    }
+
+    if (chatTtsSessionRef.current === session) {
+      chatTtsPlayingRef.current = false;
+      setChatTtsSpeaking(false);
+      setChatTtsPaused(false);
+      try { await spotifyPlay(); } catch {}
+    }
+  }, [cleanupChatTts]);
+
+  // Watch for new chat assistant messages → add to TTS queue
+  useEffect(() => {
+    if (!chatReadEnabled) return;
+    if (chatEntries.length === 0) return;
+
+    const lastEntry = chatEntries[chatEntries.length - 1];
+    if (lastEntry.role !== "assistant") return;
+    if (lastEntry.id <= lastChatSpokenIdRef.current) return;
+    // Skip tool actions, only read natural language replies
+    if (lastEntry.action && lastEntry.action !== "reply" && lastEntry.action !== "ask" && lastEntry.action !== "refuse") return;
+
+    lastChatSpokenIdRef.current = lastEntry.id;
+
+    // Add to queue
+    chatTtsQueueRef.current.push(lastEntry.content);
+
+    // Start processing if not already running and AI insight not reading
+    if (!chatTtsPlayingRef.current && !isReadingRef.current) {
+      processQueue();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatEntries, chatReadEnabled]);
+
+  // When AI insight finishes reading → process pending chat TTS queue
+  useEffect(() => {
+    if (!isReading && chatTtsQueueRef.current.length > 0 && !chatTtsPlayingRef.current) {
+      processQueue();
+    }
+  }, [isReading, processQueue]);
+
+  // Like track
+  const { liked, loading: likeLoading, rateLimited, toggleLike, refreshLikeStatus } = useLikeTrack({
+    trackId: track?.id ?? null,
+    spotifyAuthenticated: spotifyAuthed,
+  });
+
+  likeChangedRef.current = refreshLikeStatus;
+
+  // Shuffle liked songs
+  const handleShuffleLiked = useCallback(async () => {
+    if (shuffleLoading) return;
+    setShuffleLoading(true);
+    try {
+      await spotifyShuffleLiked();
+    } catch (e) {
+      console.error("Shuffle liked failed:", e);
+    } finally {
+      setShuffleLoading(false);
+    }
+  }, [shuffleLoading]);
+
+  // Close AI panel when auto-read finishes (was reading → now idle, auto-triggered)
+  useEffect(() => {
+    const wasReading = prevReadingRef.current;
+    prevReadingRef.current = isReading;
+    if (wasReading && !isReading && isAutoTriggered) {
+      setActivePanel(null);
+    }
+  }, [isReading, isAutoTriggered]);
+
   const handleAiInsight = useCallback(async () => {
     if (!isAuthenticated) {
       showMainWindow();
       return;
     }
-    if (aiVisible) {
-      setAiVisible(false);
+    if (activePanel === "ai") {
+      setActivePanel(null);
     } else if (displayedAi) {
-      setAiVisible(true);
+      setActivePanel("ai");
     } else {
       await fetchAi();
     }
-  }, [aiVisible, displayedAi, fetchAi, isAuthenticated]);
+  }, [activePanel, displayedAi, fetchAi, isAuthenticated]);
 
   const handleRegenerate = useCallback(async () => {
     await fetchAi(true);
@@ -285,12 +650,19 @@ export default function OverlayApp() {
     if (!collapsed) {
       const size = await win.outerSize();
       expandedGeoRef.current = { width: size.width / sf, height: size.height / sf };
+      // Close collapsed chat if open
+      setCollapsedChatOpen(false);
+      setCollapsedChatInput("");
       // Mark collapsed BEFORE resizing so the resize handler skips saving 72x72
       collapsedRef.current = true;
       await win.setMinSize(new LogicalSize(72, 72));
       await win.setResizable(false);
       await win.setSize(new LogicalSize(72, 72));
     } else {
+      // Prevent the collapsed-chat resize effect from racing with expand
+      expandingRef.current = true;
+      setCollapsedChatOpen(false);
+      setCollapsedChatInput("");
       const { width, height } = expandedGeoRef.current;
       await win.setSize(new LogicalSize(width, height));
       await win.setMinSize(new LogicalSize(300, 180));
@@ -315,6 +687,7 @@ export default function OverlayApp() {
       } catch {}
       // Mark expanded AFTER resizing so subsequent events save the correct size
       collapsedRef.current = false;
+      expandingRef.current = false;
     }
     setCollapsed(!collapsed);
   }, [collapsed]);
@@ -443,6 +816,12 @@ export default function OverlayApp() {
   const coverArea = track ? (
     <div className="overlay-cover-area">
       {coverElement}
+      {/* Quill writing animation during AI fetch */}
+      {readAloudPhase === "fetching_ai" && (
+        <div className="overlay-pen-writing">
+          <img className="quill-img" src="/quill.png" alt="" />
+        </div>
+      )}
       {/* Top-left: collapse/expand */}
       <button
         className="overlay-cover-btn overlay-btn-tl"
@@ -454,14 +833,33 @@ export default function OverlayApp() {
           {collapsed ? <path d="M2 5L4 3L6 5" /> : <path d="M2 3L4 5L6 3" />}
         </svg>
       </button>
-      {/* Top-right: play/pause */}
+      {/* Top-right: play/pause (or TTS pause/resume during any read-aloud) */}
       <button
-        className="overlay-cover-btn overlay-btn-tr"
+        className={`overlay-cover-btn overlay-btn-tr${isAnySpeaking ? " reading-active" : ""}`}
         data-no-drag="true"
-        onClick={() => { spotifyPlayPause().catch(() => {}); }}
-        title={track.is_playing ? "Pause" : "Play"}
+        onClick={() => {
+          if (chatTtsSpeaking) {
+            toggleChatTtsPause();
+          } else if (isReading) {
+            toggleSpeechPause();
+          } else {
+            spotifyPlayPause().catch(() => {});
+          }
+        }}
+        title={isAnySpeaking ? ((speechPaused || chatTtsPaused) ? "Resume reading" : "Pause reading") : (track.is_playing ? "Pause" : "Play")}
       >
-        {track.is_playing ? (
+        {isAnySpeaking ? (
+          (speechPaused || chatTtsPaused) ? (
+            <svg width="7" height="7" viewBox="0 0 8 8" fill="#FEDFE1">
+              <polygon points="2.5,1.5 6.5,4 2.5,6.5" />
+            </svg>
+          ) : (
+            <svg width="7" height="7" viewBox="0 0 8 8" fill="#FEDFE1">
+              <rect x="2" y="1.5" width="1.5" height="5" rx="0.4" />
+              <rect x="4.5" y="1.5" width="1.5" height="5" rx="0.4" />
+            </svg>
+          )
+        ) : track.is_playing ? (
           <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
             <rect x="2" y="1.5" width="1.5" height="5" rx="0.4" />
             <rect x="4.5" y="1.5" width="1.5" height="5" rx="0.4" />
@@ -476,7 +874,11 @@ export default function OverlayApp() {
       <button
         className="overlay-cover-btn overlay-btn-bl"
         data-no-drag="true"
-        onClick={() => { spotifyPreviousTrack().catch(() => {}); }}
+        onClick={() => {
+          if (chatTtsSpeaking) skipChatTts();
+          else if (isReading) skipReadAloud();
+          spotifyPreviousTrack().catch(() => {});
+        }}
         title="Previous"
       >
         <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
@@ -484,27 +886,92 @@ export default function OverlayApp() {
           <line x1="1.2" y1="1.5" x2="1.2" y2="6.5" stroke="rgba(51,166,184,0.85)" strokeWidth="1.2" />
         </svg>
       </button>
-      {/* Bottom-right: next */}
+      {/* Bottom-right: next (or skip read-aloud during any TTS) */}
       <button
-        className="overlay-cover-btn overlay-btn-br"
+        className={`overlay-cover-btn overlay-btn-br${isAnySpeaking ? " reading-active" : ""}`}
         data-no-drag="true"
-        onClick={() => { spotifyNextTrack().catch(() => {}); }}
-        title="Next"
+        onClick={() => {
+          if (chatTtsSpeaking) {
+            skipChatTts();
+          } else if (isReading) {
+            skipReadAloud();
+          } else {
+            spotifyNextTrack().catch(() => {});
+          }
+        }}
+        title={isAnySpeaking ? "Skip read-aloud" : "Next"}
       >
-        <svg width="7" height="7" viewBox="0 0 8 8" fill="rgba(51,166,184,0.85)">
+        <svg width="7" height="7" viewBox="0 0 8 8" fill={isAnySpeaking ? "#FEDFE1" : "rgba(51,166,184,0.85)"}>
           <polygon points="3.5,1.5 6.5,4 3.5,6.5" />
-          <line x1="6.8" y1="1.5" x2="6.8" y2="6.5" stroke="rgba(51,166,184,0.85)" strokeWidth="1.2" />
+          <line x1="6.8" y1="1.5" x2="6.8" y2="6.5" stroke={isAnySpeaking ? "#FEDFE1" : "rgba(51,166,184,0.85)"} strokeWidth="1.2" />
         </svg>
       </button>
     </div>
   ) : null;
 
   if (collapsed && track) {
+    const handleCollapsedChatSend = () => {
+      const text = collapsedChatInput.trim();
+      if (!text || chatLoading) return;
+      setCollapsedChatInput("");
+      chatSendMessage(text);
+      setCollapsedChatOpen(false);
+    };
+    const handleCollapsedKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleCollapsedChatSend();
+      }
+      if (e.key === "Escape") {
+        setCollapsedChatOpen(false);
+      }
+    };
+
     return (
       <div className="overlay-frame overlay-collapsed" onMouseDown={handleMouseDown}>
         <div className="overlay-compact-content">
           {coverArea}
+          {/* Sakura AI button at center of cover */}
+          {isAuthenticated && spotifyAuthed && (
+            <button
+              className="overlay-collapsed-ai-btn"
+              data-no-drag="true"
+              onClick={() => setCollapsedChatOpen(!collapsedChatOpen)}
+              title="Quick chat"
+            >
+              {aiChatBtnImg ? (
+                <img src={aiChatBtnImg} alt="Chat" draggable={false} style={{ width: 15, height: 15 }} />
+              ) : (
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h12v8H6l-4 3V3z" />
+                </svg>
+              )}
+            </button>
+          )}
         </div>
+        {/* Collapsed chat input */}
+        {collapsedChatOpen && (
+          <div className="overlay-collapsed-chat" data-no-drag="true">
+            <input
+              ref={collapsedInputRef}
+              className="overlay-collapsed-chat-input"
+              value={collapsedChatInput}
+              onChange={(e) => setCollapsedChatInput(e.target.value)}
+              onKeyDown={handleCollapsedKeyDown}
+              placeholder="Ask anything..."
+              disabled={chatLoading}
+            />
+            <button
+              className="overlay-collapsed-chat-send"
+              onClick={handleCollapsedChatSend}
+              disabled={!collapsedChatInput.trim() || chatLoading}
+            >
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M2 14l12-6L2 2v5l8 1-8 1v5z" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -595,33 +1062,127 @@ export default function OverlayApp() {
           </div>
         </div>
 
-        {/* Body: lyrics + AI overlay */}
-        <div className="overlay-body" onWheel={handleLyricsWheel}>
-          {/* Lyrics refresh button */}
-          <button
-            className="overlay-lyrics-refresh"
-            data-no-drag="true"
-            onClick={refetchLyrics}
-            disabled={lyricsLoading}
-            title="Refresh lyrics"
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.8"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className={lyricsLoading ? "spinning" : ""}
-            >
-              <path d="M2 8a6 6 0 0110.47-4" />
-              <path d="M14 8a6 6 0 01-10.47 4" />
-              <path d="M12.47 1v3h-3" />
-              <path d="M3.53 15v-3h3" />
+        {/* Control bar: volume slider + action buttons (always visible) */}
+        <div className="overlay-control-bar" data-no-drag="true">
+          <div className="overlay-volume">
+            <svg className="overlay-volume-icon" width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" />
+              {(spotifyVolume ?? 100) > 0 && <path d="M10.5 5.5a3.5 3.5 0 010 5" fill="none" stroke="currentColor" strokeWidth="1.2" />}
+              {(spotifyVolume ?? 100) > 50 && <path d="M12 3.5a6 6 0 010 9" fill="none" stroke="currentColor" strokeWidth="1.2" />}
             </svg>
-          </button>
+            <input
+              type="range"
+              className="overlay-volume-slider"
+              min={0}
+              max={100}
+              value={spotifyVolume ?? 100}
+              onChange={(e) => handleSpotifyVolumeChange(Number(e.target.value))}
+            />
+          </div>
+          <div className="overlay-control-btns">
+            {spotifyAuthed && (
+              <>
+                <span style={{ position: "relative" }}>
+                  <button
+                    className={`overlay-ctrl-btn${liked ? " liked" : ""}`}
+                    onClick={toggleLike}
+                    disabled={likeLoading}
+                    title={liked ? "Unlike" : "Like"}
+                  >
+                    <svg width="17" height="17" viewBox="0 0 16 16" fill={liked ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5">
+                      <path d="M8 14s-5.5-3.5-5.5-7A3.5 3.5 0 018 4.5 3.5 3.5 0 0113.5 7C13.5 10.5 8 14 8 14z" />
+                    </svg>
+                  </button>
+                  {rateLimited && (
+                    <span style={{
+                      position: "absolute",
+                      top: "-18px",
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                      fontSize: "9px",
+                      color: "rgba(254,223,225,0.60)",
+                      background: "rgba(0,0,0,0.7)",
+                      padding: "1px 5px",
+                      borderRadius: "3px",
+                      whiteSpace: "nowrap",
+                      pointerEvents: "none",
+                    }}>
+                      Rate limited
+                    </span>
+                  )}
+                </span>
+                <button
+                  className="overlay-ctrl-btn"
+                  onClick={handleShuffleLiked}
+                  disabled={shuffleLoading}
+                  title="Shuffle liked songs"
+                >
+                  <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M2 4h3l3 8h4" />
+                    <path d="M2 12h3l3-8h4" />
+                    <path d="M13 3l2 1.5-2 1.5" />
+                    <path d="M13 11l2 1.5-2 1.5" />
+                  </svg>
+                </button>
+              </>
+            )}
+            {spotifyAuthed && (
+              <button
+                className="overlay-ctrl-btn"
+                onClick={() => setActivePanel(activePanel === "device" ? null : "device")}
+                title="Switch device"
+              >
+                <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="12" height="8" rx="1" />
+                  <path d="M5 14h6" />
+                  <path d="M8 11v3" />
+                </svg>
+              </button>
+            )}
+            {spotifyAuthed && isAuthenticated && (
+              <button
+                className="overlay-ctrl-btn"
+                onClick={() => setActivePanel(activePanel === "chat" ? null : "chat")}
+                title="AI Chat"
+              >
+                <svg width="17" height="17" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 3h12v8H6l-4 3V3z" />
+                  <path d="M5 6h6" />
+                  <path d="M5 8.5h4" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Body: lyrics + panel overlays */}
+        <div className="overlay-body" onWheel={handleLyricsWheel}>
+          {/* Refresh lyrics button */}
+          <div className="overlay-btn-group" data-no-drag="true">
+            <button
+              className="overlay-action-btn"
+              onClick={refetchLyrics}
+              disabled={lyricsLoading}
+              title="Refresh lyrics"
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={lyricsLoading ? "spinning" : ""}
+              >
+                <path d="M2 8a6 6 0 0110.47-4" />
+                <path d="M14 8a6 6 0 01-10.47 4" />
+                <path d="M12.47 1v3h-3" />
+                <path d="M3.53 15v-3h3" />
+              </svg>
+            </button>
+          </div>
           {/* Lyrics */}
           <div className="overlay-lyrics">
             {lyrics?.is_instrumental ? (
@@ -662,11 +1223,54 @@ export default function OverlayApp() {
             )}
           </div>
 
-          {/* AI panel - full-width overlay on lyrics */}
-          {aiVisible && displayedAi && (
-            <div className="overlay-ai-section" data-no-drag="true">
-              <div className="overlay-ai-bg" />
-              <div className="overlay-ai-content" data-no-drag="true">
+          {/* AI Insight panel */}
+          {activePanel === "ai" && displayedAi && (
+            <div className="overlay-panel" data-no-drag="true">
+              <div className="overlay-panel-bg" />
+              <button className="overlay-panel-close" onClick={() => setActivePanel(null)} title="Close">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M2 2l8 8M10 2l-8 8" />
+                </svg>
+              </button>
+              <div className="overlay-panel-content" data-no-drag="true">
+                <button
+                  className={`overlay-ai-read-btn${isReading ? " reading" : ""}`}
+                  data-no-drag="true"
+                  onClick={toggleManualRead}
+                >
+                  {isReading ? (
+                    <>
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                        <rect x="3" y="3" width="10" height="10" rx="1.5" />
+                      </svg>
+                      Stop
+                    </>
+                  ) : (
+                    <>
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M11 5L5.5 7.5V12.5L11 10Z" />
+                        <path d="M11 5L16.5 7.5V12.5L11 10Z" />
+                        <circle cx="4" cy="3.5" r="2" />
+                        <path d="M2 6.5V13" />
+                      </svg>
+                      Read Aloud
+                    </>
+                  )}
+                </button>
+                <div className="overlay-tts-volume" data-no-drag="true">
+                  <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" />
+                    {ttsVolume > 0 && <path d="M10.5 5.5a3.5 3.5 0 010 5" fill="none" stroke="currentColor" strokeWidth="1.2" />}
+                  </svg>
+                  <input
+                    type="range"
+                    className="overlay-tts-slider"
+                    min={0}
+                    max={100}
+                    value={Math.round(ttsVolume * 100)}
+                    onChange={(e) => handleTtsVolumeChange(Number(e.target.value) / 100)}
+                  />
+                </div>
                 <div className="overlay-ai-text">
                   <Markdown>{displayedAi}</Markdown>
                   {track.ai_used_web_search && (
@@ -682,6 +1286,45 @@ export default function OverlayApp() {
                     {aiLoading ? "Generating..." : regenCooldown ? "Cooldown..." : "Regenerate"}
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Chat panel */}
+          {activePanel === "chat" && (
+            <div className="overlay-panel" data-no-drag="true">
+              <div className="overlay-panel-bg" />
+              <button className="overlay-panel-close" onClick={() => setActivePanel(null)} title="Close">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M2 2l8 8M10 2l-8 8" />
+                </svg>
+              </button>
+              <div className="overlay-panel-content" data-no-drag="true" style={{ padding: 0 }}>
+                <AgentChat
+                  onClose={() => setActivePanel(null)}
+                  entries={chatEntries}
+                  loading={chatLoading}
+                  sendMessage={chatSendMessage}
+                  reset={chatReset}
+                  cancel={chatCancel}
+                  chatReadEnabled={chatReadEnabled}
+                  onToggleChatRead={toggleChatRead}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Device picker panel */}
+          {activePanel === "device" && (
+            <div className="overlay-panel" data-no-drag="true">
+              <div className="overlay-panel-bg" />
+              <button className="overlay-panel-close" onClick={() => setActivePanel(null)} title="Close">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M2 2l8 8M10 2l-8 8" />
+                </svg>
+              </button>
+              <div className="overlay-panel-content" data-no-drag="true" style={{ padding: 0 }}>
+                <DevicePicker onClose={() => setActivePanel(null)} />
               </div>
             </div>
           )}

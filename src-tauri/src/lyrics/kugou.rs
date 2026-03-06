@@ -89,11 +89,7 @@ impl KugouClient {
             .await
     }
 
-    async fn search_song(
-        &self,
-        track_name: &str,
-        artist: &str,
-    ) -> Result<Option<KugouSongInfo>> {
+    async fn search_song(&self, track_name: &str, artist: &str) -> Result<Option<KugouSongInfo>> {
         let keyword = format!("{} {}", track_name, artist);
 
         let resp = self

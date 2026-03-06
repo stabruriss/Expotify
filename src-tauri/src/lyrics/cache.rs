@@ -29,7 +29,13 @@ impl LyricsCache {
         // Sanitize track_id for use as filename
         let safe_id: String = track_id
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         self.dir.join(format!("{}.json", safe_id))
     }
@@ -46,7 +52,10 @@ impl LyricsCache {
         let lyrics: LyricsInfo = serde_json::from_str(&data).ok()?;
 
         // Promote to memory
-        self.mem.write().await.insert(track_id.to_string(), lyrics.clone());
+        self.mem
+            .write()
+            .await
+            .insert(track_id.to_string(), lyrics.clone());
         Some(lyrics)
     }
 

@@ -41,12 +41,19 @@ pub fn is_likely_instrumental(track_name: &str) -> bool {
         "前奏曲",
     ];
 
-    let has_classical = classical_patterns
-        .iter()
-        .any(|p| name_lower.contains(p));
+    let has_classical = classical_patterns.iter().any(|p| name_lower.contains(p));
 
     if has_classical {
-        let vocal_hints = ["vocal", "feat.", "feat ", "歌", "唱", "词", "aria", "咏叹调"];
+        let vocal_hints = [
+            "vocal",
+            "feat.",
+            "feat ",
+            "歌",
+            "唱",
+            "词",
+            "aria",
+            "咏叹调",
+        ];
         let has_vocal = vocal_hints.iter().any(|h| name_lower.contains(h));
         return !has_vocal;
     }

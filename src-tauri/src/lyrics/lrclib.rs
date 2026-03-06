@@ -109,11 +109,7 @@ impl LrclibClient {
                     if resp.status().is_server_error() {
                         let status = resp.status();
                         last_err = Some(anyhow::anyhow!("LRCLIB server error: {}", status));
-                        log::warn!(
-                            "LRCLIB /api/get attempt {} got {}",
-                            attempt + 1,
-                            status
-                        );
+                        log::warn!("LRCLIB /api/get attempt {} got {}", attempt + 1, status);
                         continue; // retry on 5xx
                     }
                     let data: LrclibResponse = resp
@@ -125,11 +121,7 @@ impl LrclibClient {
                     return Ok(Self::parse_response(data));
                 }
                 Err(e) => {
-                    log::warn!(
-                        "LRCLIB /api/get attempt {} failed: {}",
-                        attempt + 1,
-                        e
-                    );
+                    log::warn!("LRCLIB /api/get attempt {} failed: {}", attempt + 1, e);
                     last_err = Some(e.into());
                     continue; // retry on timeout/connection error
                 }
@@ -153,11 +145,7 @@ impl LrclibClient {
         for attempt in 0..TIMEOUTS.len() {
             if attempt > 0 {
                 tokio::time::sleep(BACKOFF[attempt - 1]).await;
-                log::info!(
-                    "LRCLIB /api/search retry {} for '{}'",
-                    attempt,
-                    query
-                );
+                log::info!("LRCLIB /api/search retry {} for '{}'", attempt, query);
             }
 
             match self
@@ -173,11 +161,7 @@ impl LrclibClient {
                     if resp.status().is_server_error() {
                         let status = resp.status();
                         last_err = Some(anyhow::anyhow!("LRCLIB search server error: {}", status));
-                        log::warn!(
-                            "LRCLIB /api/search attempt {} got {}",
-                            attempt + 1,
-                            status
-                        );
+                        log::warn!("LRCLIB /api/search attempt {} got {}", attempt + 1, status);
                         continue;
                     }
                     let results: Vec<LrclibResponse> = resp
@@ -214,11 +198,7 @@ impl LrclibClient {
                     return Ok(best.and_then(Self::parse_response));
                 }
                 Err(e) => {
-                    log::warn!(
-                        "LRCLIB /api/search attempt {} failed: {}",
-                        attempt + 1,
-                        e
-                    );
+                    log::warn!("LRCLIB /api/search attempt {} failed: {}", attempt + 1, e);
                     last_err = Some(e.into());
                     continue;
                 }

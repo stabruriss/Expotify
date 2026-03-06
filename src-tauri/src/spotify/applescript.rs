@@ -122,6 +122,133 @@ pub fn spotify_previous_track() -> Result<()> {
     run_spotify_command("previous track")
 }
 
+pub fn spotify_pause() -> Result<()> {
+    run_spotify_command("pause")
+}
+
+pub fn spotify_play() -> Result<()> {
+    run_spotify_command("play")
+}
+
+/// Play a specific track by Spotify URI (without raising the Spotify window)
+pub fn spotify_play_track(uri: &str) -> Result<()> {
+    if !is_spotify_running() {
+        anyhow::bail!("Spotify is not running");
+    }
+
+    // Validate URI format to prevent AppleScript injection
+    if !uri.starts_with("spotify:track:") && !uri.starts_with("spotify:episode:") {
+        anyhow::bail!("Invalid Spotify URI: {}", uri);
+    }
+
+    // Play track via AppleScript. `tell application "Spotify"` activates the window,
+    // so we save the frontmost app, play, hide Spotify, and restore focus.
+    let script = format!(
+        r#"
+tell application "System Events"
+    set frontApp to name of first application process whose frontmost is true
+end tell
+tell application "Spotify" to play track "{}"
+tell application "System Events"
+    set visible of process "Spotify" to false
+end tell
+tell application frontApp to activate
+"#,
+        uri
+    );
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .context("Failed to execute osascript")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to play track: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Shuffle play the user's liked songs collection
+pub fn spotify_shuffle_collection() -> Result<()> {
+    if !is_spotify_running() {
+        anyhow::bail!("Spotify is not running");
+    }
+
+    let script = r#"
+tell application "System Events"
+    set frontApp to name of first application process whose frontmost is true
+end tell
+tell application "Spotify"
+    set shuffling to true
+    play track "spotify:collection:tracks"
+end tell
+tell application "System Events"
+    set visible of process "Spotify" to false
+end tell
+tell application frontApp to activate
+"#;
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .context("Failed to execute osascript")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to shuffle liked songs: {}", stderr);
+    }
+
+    Ok(())
+}
+
+/// Get Spotify's current volume (0-100)
+pub fn get_spotify_volume() -> Result<u32> {
+    if !is_spotify_running() {
+        anyhow::bail!("Spotify is not running");
+    }
+    let script = r#"tell application "Spotify" to sound volume"#;
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .context("Failed to execute osascript")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("AppleScript error: {}", stderr);
+    }
+    let vol: u32 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .context("Failed to parse volume")?;
+    Ok(vol)
+}
+
+/// Set Spotify's volume (0-100)
+pub fn set_spotify_volume(volume: u32) -> Result<()> {
+    if !is_spotify_running() {
+        anyhow::bail!("Spotify is not running");
+    }
+    let vol = volume.min(100);
+    let script = format!(
+        r#"tell application "Spotify" to set sound volume to {}"#,
+        vol
+    );
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()
+        .context("Failed to execute osascript")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("AppleScript error: {}", stderr);
+    }
+    Ok(())
+}
+
 fn run_spotify_command(cmd: &str) -> Result<()> {
     if !is_spotify_running() {
         anyhow::bail!("Spotify is not running");

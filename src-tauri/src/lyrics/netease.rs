@@ -55,11 +55,7 @@ impl NetEaseClient {
         Self { client }
     }
 
-    pub async fn fetch_lyrics(
-        &self,
-        track_name: &str,
-        artist: &str,
-    ) -> Result<Option<LyricsInfo>> {
+    pub async fn fetch_lyrics(&self, track_name: &str, artist: &str) -> Result<Option<LyricsInfo>> {
         // Search for the song
         let song_id = self.search_song(track_name, artist).await?;
         let Some(song_id) = song_id else {
@@ -155,10 +151,7 @@ impl NetEaseClient {
             return Ok(None);
         }
 
-        let lrc_text = data
-            .lrc
-            .and_then(|l| l.lyric)
-            .unwrap_or_default();
+        let lrc_text = data.lrc.and_then(|l| l.lyric).unwrap_or_default();
 
         if lrc_text.is_empty() {
             return Ok(None);

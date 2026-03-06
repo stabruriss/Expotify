@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::cache::TrackInfoCache;
+use super::{AgentResponse, ChatMessage};
 use crate::auth::OpenAIAuth;
 use crate::spotify::TrackInfo;
 
@@ -85,6 +86,7 @@ impl OpenAIService {
         prompt_template: &str,
         web_search: bool,
         force: bool,
+        memories: &[String],
     ) -> Result<(String, bool)> {
         if force {
             self.cache.remove(&track.id).await;
@@ -94,13 +96,27 @@ impl OpenAIService {
 
         let token = self.auth.get_access_token().await?;
 
+        let memories_str = if memories.is_empty() {
+            String::new()
+        } else {
+            let items: Vec<String> = memories
+                .iter()
+                .enumerate()
+                .map(|(i, m)| format!("{}. {}", i + 1, m))
+                .collect();
+            format!("User memories:\n{}", items.join("\n"))
+        };
+
         let prompt = prompt_template
             .replace("{name}", &track.name)
             .replace("{artist}", &track.artist)
-            .replace("{album}", &track.album);
+            .replace("{album}", &track.album)
+            .replace("{memories}", &memories_str);
 
         let tools = if web_search {
-            vec![Tool { r#type: "web_search".to_string() }]
+            vec![Tool {
+                r#type: "web_search".to_string(),
+            }]
         } else {
             vec![]
         };
@@ -141,6 +157,104 @@ impl OpenAIService {
         self.cache.set(track.id.clone(), description.clone()).await;
 
         Ok((description, used_web_search))
+    }
+
+    /// Execute agent chat: send conversation history with system prompt, get structured action response
+    pub async fn agent_chat(
+        &self,
+        messages: &[ChatMessage],
+        model: &str,
+        prompt_template: &str,
+        track_name: &str,
+        artist: &str,
+        album: &str,
+        volume: u32,
+        web_search: bool,
+        memories: &[String],
+    ) -> Result<AgentResponse> {
+        let token = self.auth.get_access_token().await?;
+
+        let memories_str = if memories.is_empty() {
+            String::new()
+        } else {
+            let items: Vec<String> = memories
+                .iter()
+                .enumerate()
+                .map(|(i, m)| format!("{}. {}", i + 1, m))
+                .collect();
+            format!("User memories:\n{}", items.join("\n"))
+        };
+
+        let system_prompt = prompt_template
+            .replace("{name}", track_name)
+            .replace("{artist}", artist)
+            .replace("{album}", album)
+            .replace("{volume}", &volume.to_string())
+            .replace("{memories}", &memories_str);
+
+        let mut input: Vec<InputMessage> = Vec::new();
+        for msg in messages {
+            input.push(InputMessage {
+                role: msg.role.clone(),
+                content: msg.content.clone(),
+            });
+        }
+
+        let tools = if web_search {
+            vec![Tool {
+                r#type: "web_search".to_string(),
+            }]
+        } else {
+            vec![]
+        };
+
+        let request = CodexRequest {
+            model: model.to_string(),
+            input,
+            instructions: system_prompt,
+            store: false,
+            stream: true,
+            tools,
+        };
+
+        let response = self
+            .client
+            .post(CODEX_API_ENDPOINT)
+            .bearer_auth(&token)
+            .json(&request)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+
+        let (text, _) = parse_sse_response(&response)?;
+
+        // Try to parse as JSON
+        let trimmed = text.trim();
+        // Strip markdown code fences if present
+        let json_str = if trimmed.starts_with("```") {
+            let inner = trimmed
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+            inner
+        } else {
+            trimmed
+        };
+
+        match serde_json::from_str::<AgentResponse>(json_str) {
+            Ok(resp) => Ok(resp),
+            Err(_) => {
+                // LLM didn't return valid JSON — treat as plain text reply
+                Ok(AgentResponse {
+                    action: "reply".to_string(),
+                    message: text,
+                    args: serde_json::Value::Null,
+                })
+            }
+        }
     }
 }
 
