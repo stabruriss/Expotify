@@ -56,7 +56,8 @@ export interface SpotifyDevice {
 
 // Fallback models used when API model listing is unavailable
 export const FALLBACK_MODELS = [
-  { id: "gpt-4o", name: "GPT-4o", provider: "openai" },
+  { id: "gpt-5.4", name: "gpt-5.4", provider: "openai" },
+  { id: "gpt-5.2", name: "gpt-5.2", provider: "openai" },
   { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
   { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
 ];

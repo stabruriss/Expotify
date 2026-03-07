@@ -990,14 +990,18 @@ struct AnthropicModelsResponse {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct OpenAIModel {
-    id: String,
-    created: i64,
+struct CodexModel {
+    slug: String,
+    display_name: String,
+    #[serde(default)]
+    visibility: String,
+    #[serde(default)]
+    priority: i32,
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct OpenAIModelsResponse {
-    data: Vec<OpenAIModel>,
+struct CodexModelsResponse {
+    models: Vec<CodexModel>,
 }
 
 #[tauri::command]
@@ -1032,36 +1036,34 @@ pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, S
         }
     }
 
-    // Fetch OpenAI models
+    // Fetch OpenAI/Codex models from ChatGPT backend API
     if let Ok(token) = state.openai_auth.get_access_token().await {
         match client
-            .get("https://api.openai.com/v1/models")
+            .get("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0")
             .bearer_auth(&token)
             .send()
             .await
         {
             Ok(resp) => {
-                if let Ok(data) = resp.json::<OpenAIModelsResponse>().await {
-                    let mut gpt_models: Vec<_> = data
-                        .data
+                if let Ok(data) = resp.json::<CodexModelsResponse>().await {
+                    // Filter to visible models only, exclude -codex variants (coding-specific)
+                    let mut visible: Vec<_> = data
+                        .models
                         .into_iter()
-                        .filter(|m| m.id.starts_with("gpt-"))
+                        .filter(|m| m.visibility == "list" && !m.slug.contains("-codex"))
                         .collect();
-                    gpt_models.sort_by(|a, b| b.created.cmp(&a.created));
-                    for m in gpt_models.into_iter().take(7) {
-                        let display_name = m.id.replace("gpt-", "GPT-");
+                    visible.sort_by(|a, b| a.priority.cmp(&b.priority));
+                    for m in visible {
                         models.push(ModelInfo {
-                            id: m.id,
-                            name: display_name,
+                            id: m.slug,
+                            name: m.display_name,
                             provider: "openai".to_string(),
-                            created_at: chrono::DateTime::from_timestamp(m.created, 0)
-                                .map(|dt| dt.to_rfc3339())
-                                .unwrap_or_default(),
+                            created_at: String::new(),
                         });
                     }
                 }
             }
-            Err(e) => log::warn!("Failed to fetch OpenAI models: {}", e),
+            Err(e) => log::warn!("Failed to fetch Codex models: {}", e),
         }
     }
 
