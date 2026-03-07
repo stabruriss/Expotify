@@ -54,13 +54,12 @@ export interface SpotifyDevice {
   volume_percent: number | null;
 }
 
-export const AVAILABLE_MODELS = [
-  { id: "gpt-5.2", name: "GPT-5.2", desc: "Latest", provider: "openai" },
-  { id: "gpt-5.1", name: "GPT-5.1", desc: "", provider: "openai" },
-  { id: "gpt-5", name: "GPT-5", desc: "", provider: "openai" },
-  { id: "claude-sonnet-4-5-20250514", name: "Claude Sonnet 4.5", desc: "", provider: "anthropic" },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", desc: "Latest", provider: "anthropic" },
-] as const;
+// Fallback models used when API model listing is unavailable
+export const FALLBACK_MODELS = [
+  { id: "gpt-4o", name: "GPT-4o", provider: "openai" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+  { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+];
 
 export const DEFAULT_AI_PROMPT = `Briefly introduce this song (under 500 words):
 
@@ -91,7 +90,9 @@ Available tools (reply with a single JSON object when using a tool):
 - save_memory(content): Save something about the user's preferences or interests.
 - update_prompt(type, content): Update the AI Insight ("insight") or Chat ("chat") prompt.
 
-Tool response format (JSON only, no markdown):
+CRITICAL: When calling a tool, your ENTIRE response must be a single valid JSON object — no extra text, no markdown fences, no explanation before or after the JSON. The system parses your full response as JSON; any non-JSON characters will cause the tool call to fail.
+
+Tool response format:
 {"action": "<tool>", "args": {"<param>": <value>}, "message": "brief explanation"}
 
 For normal conversation, just reply with plain text — no JSON needed.

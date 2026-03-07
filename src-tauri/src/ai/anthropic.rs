@@ -35,6 +35,8 @@ struct MessagesResponse {
 
 #[derive(Debug, Deserialize)]
 struct ContentBlock {
+    #[serde(rename = "type")]
+    block_type: Option<String>,
     text: Option<String>,
 }
 
@@ -122,6 +124,7 @@ impl AnthropicService {
         let description = response
             .content
             .iter()
+            .filter(|b| b.block_type.as_deref() != Some("thinking"))
             .filter_map(|b| b.text.as_deref())
             .collect::<Vec<_>>()
             .join("");
@@ -207,29 +210,11 @@ impl AnthropicService {
         let text = response
             .content
             .iter()
+            .filter(|b| b.block_type.as_deref() != Some("thinking"))
             .filter_map(|b| b.text.as_deref())
             .collect::<Vec<_>>()
             .join("");
 
-        // Try to parse as JSON (agent action)
-        let trimmed = text.trim();
-        let json_str = if trimmed.starts_with("```") {
-            trimmed
-                .trim_start_matches("```json")
-                .trim_start_matches("```")
-                .trim_end_matches("```")
-                .trim()
-        } else {
-            trimmed
-        };
-
-        match serde_json::from_str::<AgentResponse>(json_str) {
-            Ok(resp) => Ok(resp),
-            Err(_) => Ok(AgentResponse {
-                action: "reply".to_string(),
-                message: text,
-                args: serde_json::Value::Null,
-            }),
-        }
+        Ok(super::parse_agent_response(&text))
     }
 }

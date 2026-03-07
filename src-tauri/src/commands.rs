@@ -269,7 +269,11 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 #[tauri::command]
-pub async fn update_settings(state: State<'_, AppState>, settings: Settings) -> Result<(), String> {
+pub async fn update_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
+    // Preserve anthropic_enabled — only anthropic_activate/deactivate should change it
+    let current = state.settings.read().await;
+    settings.anthropic_enabled = current.anthropic_enabled;
+    drop(current);
     settings.save().map_err(|e| e.to_string())?;
     *state.settings.write().await = settings;
     Ok(())
@@ -961,4 +965,105 @@ pub async fn show_main_window(app: AppHandle) -> Result<(), String> {
         window.set_focus().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+// ============ Model Listing ============
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AnthropicModel {
+    id: String,
+    display_name: String,
+    created_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AnthropicModelsResponse {
+    data: Vec<AnthropicModel>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OpenAIModel {
+    id: String,
+    created: i64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct OpenAIModelsResponse {
+    data: Vec<OpenAIModel>,
+}
+
+#[tauri::command]
+pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+    let client = reqwest::Client::new();
+    let mut models: Vec<ModelInfo> = Vec::new();
+
+    // Fetch Anthropic models
+    if let Some(api_key) = state.anthropic_auth.get_api_key() {
+        match client
+            .get("https://api.anthropic.com/v1/models")
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if let Ok(data) = resp.json::<AnthropicModelsResponse>().await {
+                    let mut sorted = data.data;
+                    sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                    for m in sorted.into_iter().take(7) {
+                        models.push(ModelInfo {
+                            id: m.id,
+                            name: m.display_name,
+                            provider: "anthropic".to_string(),
+                            created_at: m.created_at,
+                        });
+                    }
+                }
+            }
+            Err(e) => log::warn!("Failed to fetch Anthropic models: {}", e),
+        }
+    }
+
+    // Fetch OpenAI models
+    if let Ok(token) = state.openai_auth.get_access_token().await {
+        match client
+            .get("https://api.openai.com/v1/models")
+            .bearer_auth(&token)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if let Ok(data) = resp.json::<OpenAIModelsResponse>().await {
+                    let mut gpt_models: Vec<_> = data
+                        .data
+                        .into_iter()
+                        .filter(|m| m.id.starts_with("gpt-"))
+                        .collect();
+                    gpt_models.sort_by(|a, b| b.created.cmp(&a.created));
+                    for m in gpt_models.into_iter().take(7) {
+                        let display_name = m.id.replace("gpt-", "GPT-");
+                        models.push(ModelInfo {
+                            id: m.id,
+                            name: display_name,
+                            provider: "openai".to_string(),
+                            created_at: chrono::DateTime::from_timestamp(m.created, 0)
+                                .map(|dt| dt.to_rfc3339())
+                                .unwrap_or_default(),
+                        });
+                    }
+                }
+            }
+            Err(e) => log::warn!("Failed to fetch OpenAI models: {}", e),
+        }
+    }
+
+    Ok(models)
 }

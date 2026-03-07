@@ -3,6 +3,23 @@ import type { TrackInfo } from "../types";
 import { getCurrentTrack, getCurrentTrackWithAi, isSpotifyRunning } from "../lib/tauri";
 
 const REGEN_COOLDOWN_MS = 5000;
+type FetchAiSource = "auto" | "manual";
+
+export interface FetchAiOptions {
+  force?: boolean;
+  source?: FetchAiSource;
+}
+
+export interface AiFetchEvent {
+  nonce: number;
+  source: FetchAiSource;
+  trackId: string;
+}
+
+interface PendingFetch {
+  force: boolean;
+  source: FetchAiSource;
+}
 
 interface UseTrackOptions {
   pollInterval?: number;
@@ -17,19 +34,32 @@ export function useTrack(options: UseTrackOptions = {}) {
   const [spotifyRunning, setSpotifyRunning] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [lastAiFetch, setLastAiFetch] = useState<AiFetchEvent | null>(null);
   const [regenCooldown, setRegenCooldown] = useState(false);
   const lastTrackId = useRef<string | null>(null);
   const aiLoadingRef = useRef(false);
   const autoAiRef = useRef(autoAi);
   const regenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFetchRef = useRef<PendingFetch | null>(null);
+  const fetchAiRef = useRef<(options?: FetchAiOptions) => Promise<void>>(async () => {});
+  const fetchNonceRef = useRef(0);
 
   // Keep ref in sync with prop
   autoAiRef.current = autoAi;
 
-  const fetchAi = useCallback(async (force = false) => {
-    if (aiLoadingRef.current) return;
+  const fetchAi = useCallback(async (options: FetchAiOptions = {}) => {
+    const { force = false, source = "manual" } = options;
+    if (aiLoadingRef.current) {
+      const pending = pendingFetchRef.current;
+      pendingFetchRef.current = {
+        force: (pending?.force ?? false) || force,
+        source: pending?.source === "manual" || source === "manual" ? "manual" : "auto",
+      };
+      return;
+    }
     aiLoadingRef.current = true;
     setAiLoading(true);
+    const requestedTrackId = lastTrackId.current;
     if (force) {
       setRegenCooldown(true);
       if (regenTimerRef.current) clearTimeout(regenTimerRef.current);
@@ -48,6 +78,14 @@ export function useTrack(options: UseTrackOptions = {}) {
               }
             : prev
         );
+        if (aiTrack.ai_description) {
+          fetchNonceRef.current += 1;
+          setLastAiFetch({
+            nonce: fetchNonceRef.current,
+            source,
+            trackId: aiTrack.id,
+          });
+        }
       }
     } catch (err) {
       const errStr = err instanceof Error ? err.message : String(err);
@@ -56,8 +94,15 @@ export function useTrack(options: UseTrackOptions = {}) {
     } finally {
       aiLoadingRef.current = false;
       setAiLoading(false);
+      const pending = pendingFetchRef.current;
+      pendingFetchRef.current = null;
+      if (pending && lastTrackId.current && (pending.force || lastTrackId.current !== requestedTrackId)) {
+        void fetchAiRef.current(pending);
+      }
     }
   }, []);
+
+  fetchAiRef.current = fetchAi;
 
   const fetchTrack = useCallback(async () => {
     try {
@@ -79,9 +124,9 @@ export function useTrack(options: UseTrackOptions = {}) {
           lastTrackId.current = trackInfo.id;
           setTrack(trackInfo);
 
-          // Auto-fetch AI if enabled
-          if (autoAiRef.current) {
-            fetchAi();
+          // Auto-fetch only for uncached tracks when enabled.
+          if (autoAiRef.current && !localStorage.getItem(`ai_insight_${trackInfo.id}`)) {
+            void fetchAi({ source: "auto" });
           }
         } else {
           setTrack((prev) =>
@@ -121,6 +166,7 @@ export function useTrack(options: UseTrackOptions = {}) {
     aiLoading,
     aiError,
     regenCooldown,
+    lastAiFetch,
     error,
     spotifyRunning,
     fetchAi,

@@ -230,31 +230,7 @@ impl OpenAIService {
 
         let (text, _) = parse_sse_response(&response)?;
 
-        // Try to parse as JSON
-        let trimmed = text.trim();
-        // Strip markdown code fences if present
-        let json_str = if trimmed.starts_with("```") {
-            let inner = trimmed
-                .trim_start_matches("```json")
-                .trim_start_matches("```")
-                .trim_end_matches("```")
-                .trim();
-            inner
-        } else {
-            trimmed
-        };
-
-        match serde_json::from_str::<AgentResponse>(json_str) {
-            Ok(resp) => Ok(resp),
-            Err(_) => {
-                // LLM didn't return valid JSON — treat as plain text reply
-                Ok(AgentResponse {
-                    action: "reply".to_string(),
-                    message: text,
-                    args: serde_json::Value::Null,
-                })
-            }
-        }
+        Ok(super::parse_agent_response(&text))
     }
 }
 

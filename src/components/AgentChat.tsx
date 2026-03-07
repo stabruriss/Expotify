@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
 import type { ChatEntry } from "../hooks/useAgentChat";
+import { useIMEComposition } from "../hooks/useIMEComposition";
 
 interface AgentChatProps {
   onClose: () => void;
@@ -11,6 +12,8 @@ interface AgentChatProps {
   cancel: () => void;
   chatReadEnabled: boolean;
   onToggleChatRead: () => void;
+  ttsVolume: number;
+  onTtsVolumeChange: (vol: number) => void;
 }
 
 export function AgentChat({
@@ -22,10 +25,13 @@ export function AgentChat({
   cancel,
   chatReadEnabled,
   onToggleChatRead,
+  ttsVolume,
+  onTtsVolumeChange,
 }: AgentChatProps) {
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { onCompositionEnd, isIMEEnter } = useIMEComposition();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,7 +49,7 @@ export function AgentChat({
   };
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !isIMEEnter()) {
       e.preventDefault();
       handleSend();
     }
@@ -64,7 +70,7 @@ export function AgentChat({
           <button
             className={`agent-chat-read-toggle${chatReadEnabled ? " active" : ""}`}
             onClick={onToggleChatRead}
-            title={chatReadEnabled ? "Disable read aloud" : "Enable read aloud"}
+            title={chatReadEnabled ? "Auto read: ON" : "Auto read: OFF"}
           >
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M11 5L5.5 7.5V12.5L11 10Z" />
@@ -72,7 +78,22 @@ export function AgentChat({
               <circle cx="4" cy="3.5" r="2" />
               <path d="M2 6.5V13" />
             </svg>
+            Auto Read
           </button>
+          <div className="overlay-tts-volume" data-no-drag="true">
+            <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" />
+              {ttsVolume > 0 && <path d="M10.5 5.5a3.5 3.5 0 010 5" fill="none" stroke="currentColor" strokeWidth="1.2" />}
+            </svg>
+            <input
+              type="range"
+              className="overlay-tts-slider"
+              min={0}
+              max={100}
+              value={Math.round(ttsVolume * 100)}
+              onChange={(e) => onTtsVolumeChange(Number(e.target.value) / 100)}
+            />
+          </div>
           <button className="agent-chat-reset" onClick={reset} title="Reset conversation">
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M2 8a6 6 0 0110.47-4" />
@@ -80,6 +101,7 @@ export function AgentChat({
               <path d="M12.47 1v3h-3" />
               <path d="M3.53 15v-3h3" />
             </svg>
+            Reset
           </button>
         </div>
       </div>
@@ -110,6 +132,7 @@ export function AgentChat({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onCompositionEnd={onCompositionEnd}
           placeholder="Type a message..."
           disabled={loading}
         />

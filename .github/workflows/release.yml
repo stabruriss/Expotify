@@ -58,15 +58,13 @@ jobs:
           releaseDraft: false
           prerelease: false
 
-      - name: Upload versioned and universal DMG
+      - name: Upload versioned DMG
         run: |
           VERSION="${{ github.ref_name }}"
           DMG=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | head -1)
           if [ -n "$DMG" ]; then
             cp "$DMG" "/tmp/Expotify_${VERSION}.dmg"
-            cp "$DMG" /tmp/Expotify.dmg
             gh release upload ${{ github.ref_name }} "/tmp/Expotify_${VERSION}.dmg" --clobber
-            gh release upload ${{ github.ref_name }} /tmp/Expotify.dmg --clobber
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -79,7 +77,7 @@ jobs:
           VERSION="${VERSION#v}"
           git clone https://x-access-token:${WEBSITE_PAT}@github.com/stabruriss/Expotify-Website.git /tmp/website
           cd /tmp/website
-          echo "{\"version\":\"${VERSION}\",\"download_url\":\"https://github.com/stabruriss/Expotify/releases/latest/download/Expotify.dmg\",\"release_url\":\"https://www.expotify.live/\"}" > public/version.json
+          echo "{\"version\":\"${VERSION}\",\"download_url\":\"https://github.com/stabruriss/Expotify/releases/download/v${VERSION}/Expotify_v${VERSION}.dmg\",\"release_url\":\"https://www.expotify.live/\"}" > public/version.json
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/version.json

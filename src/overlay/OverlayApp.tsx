@@ -4,12 +4,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize, LogicalPosition } from "@tauri-apps/api/dpi";
 import { useTrack } from "../hooks/useTrack";
 import { useLyrics } from "../hooks/useLyrics";
-import { useReadAloud } from "../hooks/useReadAloud";
+import { useReadAloud, type ReadAloudMode } from "../hooks/useReadAloud";
 import { useLikeTrack } from "../hooks/useLikeTrack";
 import { useAgentChat } from "../hooks/useAgentChat";
 import { getAuthStatus, showMainWindow, saveOverlayGeometry, spotifyPlayPause, spotifyNextTrack, spotifyPreviousTrack, spotifyGetVolume, spotifySetVolume, spotifyShuffleLiked, spotifyPause, spotifyPlay, ttsSynthesize, getSettings, updateSettings } from "../lib/tauri";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
 import { DevicePicker } from "../components/DevicePicker";
+import { useIMEComposition } from "../hooks/useIMEComposition";
 import { AgentChat } from "../components/AgentChat";
 import frameImg from "./assets/frame.png";
 import "./overlay.css";
@@ -64,12 +65,46 @@ function isInteractiveTarget(target: HTMLElement): boolean {
 }
 
 export default function OverlayApp() {
-  // Settings sync from main window via localStorage
+  const { onCompositionEnd: imeCompositionEnd, isIMEEnter } = useIMEComposition();
+
+  // Overlay-local auto-read mode. Migrate the legacy boolean to "all".
+  const [readAloudMode, setReadAloudMode] = useState<ReadAloudMode>(() => {
+    const stored = localStorage.getItem("expotify_insight_read_mode");
+    if (stored === "off" || stored === "fetched_only" || stored === "all") {
+      return stored;
+    }
+    return localStorage.getItem("expotify_insight_read_enabled") === "true" ? "all" : "off";
+  });
+  const [readModeMenuOpen, setReadModeMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "expotify_insight_read_mode") {
+        if (e.newValue === "off" || e.newValue === "fetched_only" || e.newValue === "all") {
+          setReadAloudMode(e.newValue);
+        }
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const setInsightReadMode = useCallback((nextMode: ReadAloudMode) => {
+    setReadAloudMode(nextMode);
+    setReadModeMenuOpen(false);
+    localStorage.setItem("expotify_insight_read_mode", nextMode);
+    localStorage.removeItem("expotify_insight_read_enabled");
+  }, []);
+
+  const toggleInsightReadMenu = useCallback(() => {
+    setReadModeMenuOpen((open) => !open);
+  }, []);
+
+  const isReadAloudActive = readAloudMode !== "off";
+
+  // Auto-fetch AI insight toggle (synced from main window settings)
   const [autoAiEnabled, setAutoAiEnabled] = useState(
     () => localStorage.getItem("expotify_settings_ai_auto") === "true"
-  );
-  const [readAloudEnabled, setReadAloudEnabled] = useState(
-    () => localStorage.getItem("expotify_settings_ai_read_aloud") === "true"
   );
 
   useEffect(() => {
@@ -77,19 +112,14 @@ export default function OverlayApp() {
       if (e.key === "expotify_settings_ai_auto") {
         setAutoAiEnabled(e.newValue === "true");
       }
-      if (e.key === "expotify_settings_ai_read_aloud") {
-        setReadAloudEnabled(e.newValue === "true");
-      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  const isReadAloudActive = autoAiEnabled && readAloudEnabled;
-
-  const { track, aiLoading, aiError, regenCooldown, spotifyRunning, fetchAi } = useTrack({
+  const { track, aiLoading, aiError, regenCooldown, spotifyRunning, fetchAi, lastAiFetch } = useTrack({
     pollInterval: isReadAloudActive ? 1 : 3,
-    autoAi: false,
+    autoAi: autoAiEnabled,
   });
   const { lyrics, currentLineIndex, loading: lyricsLoading, refetchLyrics } = useLyrics({ track });
 
@@ -102,7 +132,10 @@ export default function OverlayApp() {
 
   type PanelType = "ai" | "chat" | "device" | null;
   const [activePanel, setActivePanel] = useState<PanelType>(null);
-  const [cachedAi, setCachedAi] = useState<string | null>(null);
+  const [cachedAi, setCachedAi] = useState<{ trackId: string | null; text: string | null }>({
+    trackId: null,
+    text: null,
+  });
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [spotifyAuthed, setSpotifyAuthed] = useState(false);
   const [shuffleLoading, setShuffleLoading] = useState(false);
@@ -299,32 +332,38 @@ export default function OverlayApp() {
   useEffect(() => {
     if (track?.id) {
       const stored = localStorage.getItem(`ai_insight_${track.id}`);
-      setCachedAi(stored);
+      setCachedAi({ trackId: track.id, text: stored });
     } else {
-      setCachedAi(null);
+      setCachedAi({ trackId: null, text: null });
     }
   }, [track?.id]);
 
   useEffect(() => {
     if (track?.ai_description && track.id) {
       localStorage.setItem(`ai_insight_${track.id}`, track.ai_description);
-      setCachedAi(track.ai_description);
+      setCachedAi({ trackId: track.id, text: track.ai_description });
       setActivePanel("ai");
     }
-  }, [track?.ai_description]);
+  }, [track?.ai_description, track?.id]);
 
   // Sync AI insight from other window via storage event
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (track?.id && e.key === `ai_insight_${track.id}` && e.newValue) {
-        setCachedAi(e.newValue);
+      if (track?.id && e.key === `ai_insight_${track.id}`) {
+        setCachedAi({ trackId: track.id, text: e.newValue });
       }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, [track?.id]);
 
-  const displayedAi = track?.ai_description ?? cachedAi;
+  const displayedAi =
+    track?.ai_description ??
+    (track?.id && cachedAi.trackId === track.id ? cachedAi.text : null);
+  const displayedAiTrackId =
+    track?.ai_description
+      ? (track?.id ?? null)
+      : (track?.id && cachedAi.trackId === track.id ? track.id : null);
 
   // Collapsed mode chat input
   const [collapsedChatOpen, setCollapsedChatOpen] = useState(false);
@@ -443,11 +482,13 @@ export default function OverlayApp() {
 
   // Read-aloud orchestration
   const { phase: readAloudPhase, skipReadAloud, toggleSpeechPause, speechPaused, toggleManualRead, isAutoTriggered } = useReadAloud({
-    enabled: isReadAloudActive,
+    mode: readAloudMode,
+    autoFetchEnabled: autoAiEnabled,
     track,
     displayedAi,
+    displayedAiTrackId,
     aiLoading,
-    fetchAi,
+    lastAiFetch,
     ttsVolume,
   });
   const isReading = readAloudPhase !== "idle";
@@ -580,6 +621,12 @@ export default function OverlayApp() {
     }
   }, [isReading, isAutoTriggered]);
 
+  useEffect(() => {
+    if (activePanel !== "ai" && readModeMenuOpen) {
+      setReadModeMenuOpen(false);
+    }
+  }, [activePanel, readModeMenuOpen]);
+
   const handleAiInsight = useCallback(async () => {
     if (!isAuthenticated) {
       showMainWindow();
@@ -590,13 +637,20 @@ export default function OverlayApp() {
     } else if (displayedAi) {
       setActivePanel("ai");
     } else {
-      await fetchAi();
+      await fetchAi({ source: "manual" });
     }
   }, [activePanel, displayedAi, fetchAi, isAuthenticated]);
 
   const handleRegenerate = useCallback(async () => {
-    await fetchAi(true);
+    await fetchAi({ force: true, source: "manual" });
   }, [fetchAi]);
+
+  const autoReadSummary =
+    readAloudMode === "fetched_only"
+      ? "New fetched"
+      : readAloudMode === "all"
+        ? "Cached + new"
+        : "Off";
 
   const handleMouseDown = useCallback(
     async (event: MouseEvent<HTMLElement>) => {
@@ -918,7 +972,7 @@ export default function OverlayApp() {
       setCollapsedChatOpen(false);
     };
     const handleCollapsedKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && !e.shiftKey && !isIMEEnter()) {
         e.preventDefault();
         handleCollapsedChatSend();
       }
@@ -958,6 +1012,7 @@ export default function OverlayApp() {
               value={collapsedChatInput}
               onChange={(e) => setCollapsedChatInput(e.target.value)}
               onKeyDown={handleCollapsedKeyDown}
+              onCompositionEnd={imeCompositionEnd}
               placeholder="Ask anything..."
               disabled={chatLoading}
             />
@@ -1233,43 +1288,90 @@ export default function OverlayApp() {
                 </svg>
               </button>
               <div className="overlay-panel-content" data-no-drag="true">
-                <button
-                  className={`overlay-ai-read-btn${isReading ? " reading" : ""}`}
-                  data-no-drag="true"
-                  onClick={toggleManualRead}
-                >
-                  {isReading ? (
-                    <>
-                      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-                        <rect x="3" y="3" width="10" height="10" rx="1.5" />
+                <div className="overlay-ai-header">
+                  <span className="overlay-ai-title">AI Insight</span>
+                  <div className="overlay-ai-header-btns">
+                    <button
+                      className={`overlay-ai-read-btn${isReading ? " reading" : ""}`}
+                      data-no-drag="true"
+                      onClick={toggleManualRead}
+                    >
+                      {isReading ? (
+                        <>
+                          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                            <rect x="3" y="3" width="10" height="10" rx="1.5" />
+                          </svg>
+                          Stop
+                        </>
+                      ) : (
+                        <>
+                          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 5L5.5 7.5V12.5L11 10Z" />
+                            <path d="M11 5L16.5 7.5V12.5L11 10Z" />
+                            <circle cx="4" cy="3.5" r="2" />
+                            <path d="M2 6.5V13" />
+                          </svg>
+                          Read
+                        </>
+                      )}
+                    </button>
+                    <div className="overlay-ai-read-mode" data-no-drag="true">
+                      <button
+                        className={`agent-chat-read-toggle${isReadAloudActive ? " active" : ""}`}
+                        onClick={toggleInsightReadMenu}
+                        title={`Auto read: ${autoReadSummary}`}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M11 5L5.5 7.5V12.5L11 10Z" />
+                          <path d="M11 5L16.5 7.5V12.5L11 10Z" />
+                          <circle cx="4" cy="3.5" r="2" />
+                          <path d="M2 6.5V13" />
+                        </svg>
+                        Auto Read
+                        {isReadAloudActive && (
+                          <span className="overlay-ai-read-mode-label">
+                            {readAloudMode === "all" ? "All" : "New"}
+                          </span>
+                        )}
+                      </button>
+                      {readModeMenuOpen && (
+                        <div className="overlay-ai-read-menu" data-no-drag="true">
+                          <button
+                            className={`overlay-ai-read-menu-item${readAloudMode === "off" ? " active" : ""}`}
+                            onClick={() => setInsightReadMode("off")}
+                          >
+                            Off
+                          </button>
+                          <button
+                            className={`overlay-ai-read-menu-item${readAloudMode === "fetched_only" ? " active" : ""}`}
+                            onClick={() => setInsightReadMode("fetched_only")}
+                          >
+                            New fetched
+                          </button>
+                          <button
+                            className={`overlay-ai-read-menu-item${readAloudMode === "all" ? " active" : ""}`}
+                            onClick={() => setInsightReadMode("all")}
+                          >
+                            Cached + new
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="overlay-tts-volume" data-no-drag="true">
+                      <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" />
+                        {ttsVolume > 0 && <path d="M10.5 5.5a3.5 3.5 0 010 5" fill="none" stroke="currentColor" strokeWidth="1.2" />}
                       </svg>
-                      Stop
-                    </>
-                  ) : (
-                    <>
-                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M11 5L5.5 7.5V12.5L11 10Z" />
-                        <path d="M11 5L16.5 7.5V12.5L11 10Z" />
-                        <circle cx="4" cy="3.5" r="2" />
-                        <path d="M2 6.5V13" />
-                      </svg>
-                      Read Aloud
-                    </>
-                  )}
-                </button>
-                <div className="overlay-tts-volume" data-no-drag="true">
-                  <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" />
-                    {ttsVolume > 0 && <path d="M10.5 5.5a3.5 3.5 0 010 5" fill="none" stroke="currentColor" strokeWidth="1.2" />}
-                  </svg>
-                  <input
-                    type="range"
-                    className="overlay-tts-slider"
-                    min={0}
-                    max={100}
-                    value={Math.round(ttsVolume * 100)}
-                    onChange={(e) => handleTtsVolumeChange(Number(e.target.value) / 100)}
-                  />
+                      <input
+                        type="range"
+                        className="overlay-tts-slider"
+                        min={0}
+                        max={100}
+                        value={Math.round(ttsVolume * 100)}
+                        onChange={(e) => handleTtsVolumeChange(Number(e.target.value) / 100)}
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div className="overlay-ai-text">
                   <Markdown>{displayedAi}</Markdown>
@@ -1309,6 +1411,8 @@ export default function OverlayApp() {
                   cancel={chatCancel}
                   chatReadEnabled={chatReadEnabled}
                   onToggleChatRead={toggleChatRead}
+                  ttsVolume={ttsVolume}
+                  onTtsVolumeChange={handleTtsVolumeChange}
                 />
               </div>
             </div>

@@ -779,6 +779,26 @@ body {
 
 /* ============ Spotify Connect Section (main panel) ============ */
 
+.connect-section {
+  background: #1a1a1a;
+  border-radius: 10px;
+  padding: 14px 16px;
+  border-left: 3px solid #1DB954;
+}
+
+.connect-buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.connect-btn {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 .spotify-connect-section {
   background: #1a1a1a;
   border-radius: 10px;

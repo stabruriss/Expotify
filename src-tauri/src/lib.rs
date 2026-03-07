@@ -225,6 +225,8 @@ pub fn run() {
             commands::anthropic_deactivate,
             // Agent Chat
             commands::agent_chat,
+            // Model listing
+            commands::list_models,
         ])
         .on_window_event(|window, event| {
             // Hide windows on close instead of destroying, so they can be reopened

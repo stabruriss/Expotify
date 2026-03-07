@@ -1,6 +1,6 @@
 [package]
 name = "expotify"
-version = "0.5.0"
+version = "0.5.1"
 description = "Spotify track info display with AI insights"
 authors = ["wunan"]
 edition = "2021"
@@ -22,7 +22,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "http2", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "http2", "rustls-tls"] }
 
 # OAuth & Auth
 url = "2"
@@ -49,6 +49,8 @@ open = "5"
 
 # Edge TTS
 msedge-tts = "0.3"
+# Static-link OpenSSL (required by msedge-tts -> isahc -> curl)
+openssl = { version = "0.10", features = ["vendored"] }
 
 # TOTP for Spotify sp_dc token exchange
 hmac = "0.12"

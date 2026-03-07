@@ -183,6 +183,19 @@ export async function spotifyPlayTrack(uri: string): Promise<void> {
   return invoke("spotify_play_track", { uri });
 }
 
+// ============ Models ============
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  created_at: string;
+}
+
+export async function listModels(): Promise<ModelInfo[]> {
+  return invoke("list_models");
+}
+
 // ============ Agent Chat ============
 
 export async function agentChat(messages: ChatMessage[]): Promise<AgentChatResult> {
