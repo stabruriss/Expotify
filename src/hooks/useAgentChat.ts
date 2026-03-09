@@ -94,6 +94,10 @@ export function useAgentChat(options?: UseAgentChatOptions) {
       ) {
         options.onLikeChanged();
       }
+
+      if (result.executed && result.response.action === "save_memory") {
+        localStorage.setItem("expotify_settings_memories_updated_at", String(Date.now()));
+      }
     } catch (e) {
       if (cancelledRef.current) return;
       const errEntry: ChatEntry = {

@@ -103,34 +103,56 @@ function App() {
     [track?.ai_description, track?.id, cachedAi]
   );
 
-  const loadSettings = useCallback(async () => {
+  const applySettingsToDrafts = useCallback((s: Settings) => {
+    setDraftModel(s.ai_model);
+    setDraftPrompt(s.ai_prompt);
+    setDraftWebSearch(s.ai_web_search);
+    setDraftChatModel(s.chat_model);
+    setDraftChatPrompt(s.chat_prompt);
+    setDraftMemories([...s.memories]);
+  }, []);
+
+  const loadSettings = useCallback(async (syncDrafts = false) => {
     try {
       const s = await getSettings();
       setSettings(s);
-      setDraftModel(s.ai_model);
-      setDraftPrompt(s.ai_prompt);
-      setDraftWebSearch(s.ai_web_search);
+      if (syncDrafts) {
+        applySettingsToDrafts(s);
+      }
       // Sync to localStorage for overlay window
       localStorage.setItem("expotify_settings_ai_auto", String(s.ai_auto));
       localStorage.setItem("expotify_settings_tts_volume", String(s.tts_volume));
     } catch (e) {
       console.error("Failed to load settings", e);
     }
-  }, []);
+  }, [applySettingsToDrafts]);
 
   useEffect(() => {
-    loadSettings();
+    loadSettings(true);
   }, [loadSettings]);
 
-  const openSettings = () => {
-    if (settings) {
-      setDraftModel(settings.ai_model);
-      setDraftPrompt(settings.ai_prompt);
-      setDraftWebSearch(settings.ai_web_search);
-      setDraftChatModel(settings.chat_model);
-      setDraftChatPrompt(settings.chat_prompt);
-      setDraftMemories([...settings.memories]);
-    }
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== "expotify_settings_memories_updated_at") return;
+      loadSettings(false);
+      if (!showSettings) return;
+      getSettings()
+        .then((s) => {
+          setSettings(s);
+          setDraftMemories([...s.memories]);
+        })
+        .catch((err) => {
+          console.error("Failed to sync memories", err);
+        });
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [loadSettings, showSettings]);
+
+  const openSettings = async () => {
+    try {
+      await loadSettings(true);
+    } catch {}
     setSettingsTab("insight");
     setNewMemory("");
     setShowSettings(true);
