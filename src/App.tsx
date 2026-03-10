@@ -13,9 +13,25 @@ import "./App.css";
 
 function App() {
   const { onCompositionEnd: imeCompositionEnd, isIMEEnter } = useIMEComposition();
-  const { authStatus, loading: authLoading, spotifyLoading, error: authError, loginOpenai, logoutOpenai, activateAnthropic, deactivateAnthropic, loginSpotify, connectSpotify, disconnectSpotify } = useAuth();
+  const {
+    authStatus,
+    loading: authLoading,
+    spotifyLoading,
+    anthropicPending,
+    error: authError,
+    loginOpenai,
+    logoutOpenai,
+    startAnthropicLogin,
+    completeAnthropicLogin,
+    cancelAnthropicLogin,
+    logoutAnthropic,
+    loginSpotify,
+    connectSpotify,
+    disconnectSpotify,
+  } = useAuth();
   const [spDcInput, setSpDcInput] = useState("");
   const [spDcError, setSpDcError] = useState<string | null>(null);
+  const [anthropicCode, setAnthropicCode] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const {
@@ -316,8 +332,6 @@ function App() {
               {authLoading ? "Connecting..." : "Connect ChatGPT to see AI insights"}
             </button>
           )}
-          {/* Note: Anthropic connects automatically via local API key */}
-
           {/* Lyrics */}
           <LyricsDisplay
             lyrics={lyrics}
@@ -335,7 +349,7 @@ function App() {
       ) : null}
 
       {/* Connect services section — parallel CTA buttons for unconnected services */}
-      {(!authStatus.openai || (!authStatus.anthropic && authStatus.anthropic_available) || !authStatus.spotify) && (
+      {(!authStatus.openai || !authStatus.anthropic || !authStatus.spotify || anthropicPending) && (
         <div className="connect-section">
           <div className="connect-buttons">
             {!authStatus.openai && (
@@ -343,9 +357,16 @@ function App() {
                 {authLoading ? "Connecting..." : "Connect ChatGPT"}
               </button>
             )}
-            {!authStatus.anthropic && authStatus.anthropic_available && (
-              <button className="btn-primary connect-btn" onClick={activateAnthropic} disabled={authLoading}>
-                {authLoading ? "Activating..." : "Activate Claude"}
+            {!authStatus.anthropic && !anthropicPending && (
+              <button
+                className="btn-primary connect-btn"
+                onClick={async () => {
+                  await startAnthropicLogin();
+                  setAnthropicCode("");
+                }}
+                disabled={authLoading}
+              >
+                {authLoading ? "Opening login..." : "Connect Claude Max/Pro"}
               </button>
             )}
             {!authStatus.spotify && (
@@ -390,6 +411,44 @@ function App() {
               </ol>
             </details>
           )}
+          {anthropicPending && !authStatus.anthropic && (
+            <div className="sp-dc-help">
+              <p className="sp-dc-help-text">
+                Claude login opened in your browser. After approval, paste the authorization code shown on the callback page here.
+              </p>
+              <div className="sp-dc-input-row">
+                <input
+                  type="text"
+                  className="field-input"
+                  placeholder="Paste Claude authorization code"
+                  value={anthropicCode}
+                  onChange={(e) => setAnthropicCode(e.target.value)}
+                />
+                <button
+                  className="btn-primary sp-dc-connect-btn"
+                  disabled={!anthropicCode.trim() || authLoading}
+                  onClick={async () => {
+                    try {
+                      await completeAnthropicLogin(anthropicCode);
+                      setAnthropicCode("");
+                    } catch {}
+                  }}
+                >
+                  {authLoading ? "..." : "Connect"}
+                </button>
+                <button
+                  className="logout-btn"
+                  onClick={async () => {
+                    await cancelAnthropicLogin();
+                    setAnthropicCode("");
+                  }}
+                  disabled={authLoading}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -401,7 +460,7 @@ function App() {
           </button>
         )}
         {authStatus.anthropic && (
-          <button onClick={deactivateAnthropic} className="logout-btn">
+          <button onClick={logoutAnthropic} className="logout-btn">
             Disconnect Claude
           </button>
         )}

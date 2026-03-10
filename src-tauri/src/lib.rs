@@ -11,12 +11,26 @@ use ai::{AnthropicService, OpenAIService};
 use auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use commands::{load_overlay_geometry, AppState};
 use spotify::SpotifyWebApi;
+use std::path::PathBuf;
 use std::sync::Arc;
 use storage::Settings;
 use tauri::menu::{Menu, MenuItem};
+use tauri::path::BaseDirectory;
 use tauri::Manager;
 use tauri::RunEvent;
 use tokio::sync::RwLock;
+
+fn claude_helper_script_path(app: &tauri::App) -> Result<PathBuf, String> {
+    if cfg!(debug_assertions) {
+        return Ok(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/claude-helper/runner.mjs"),
+        );
+    }
+
+    app.path()
+        .resolve("claude-helper/runner.mjs", BaseDirectory::Resource)
+        .map_err(|e| e.to_string())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -35,22 +49,26 @@ pub fn run() {
                 Arc::new(RwLock::new(None))
             };
 
-            // Anthropic auth: read API key from ~/.claude/anthropic_key.sh or env
+            let claude_helper_script = claude_helper_script_path(app)?;
+
+            // Claude auth: load stored OAuth token if present
             let anthropic_auth = Arc::new(AnthropicAuth::new());
 
             // Load settings early to check anthropic_enabled
             let settings = Settings::load().unwrap_or_default();
 
-            let anthropic_service = if anthropic_auth.is_authenticated() && settings.anthropic_enabled {
-                log::info!("[setup] Anthropic API key detected and enabled, creating service");
+            let anthropic_service = if anthropic_auth.has_stored_token() && settings.anthropic_enabled
+            {
+                log::info!("[setup] Claude OAuth token detected and enabled, creating service");
                 Arc::new(RwLock::new(Some(AnthropicService::new(
                     Arc::clone(&anthropic_auth),
+                    claude_helper_script.clone(),
                 ))))
             } else {
-                if anthropic_auth.is_authenticated() {
-                    log::info!("[setup] Anthropic API key detected but not activated by user");
+                if anthropic_auth.has_stored_token() {
+                    log::info!("[setup] Claude OAuth token detected but not activated by user");
                 } else {
-                    log::info!("[setup] Anthropic API key not found");
+                    log::info!("[setup] Claude OAuth token not found");
                 }
                 Arc::new(RwLock::new(None))
             };
@@ -70,6 +88,7 @@ pub fn run() {
                 openai_service,
                 anthropic_auth,
                 anthropic_service,
+                claude_helper_script,
                 spotify_auth,
                 spotify_webapi,
                 settings: Arc::new(RwLock::new(settings)),
@@ -221,8 +240,10 @@ pub fn run() {
             commands::spotify_set_volume,
             commands::spotify_play_track,
             // Anthropic
-            commands::anthropic_activate,
-            commands::anthropic_deactivate,
+            commands::anthropic_start_oauth,
+            commands::anthropic_complete_oauth,
+            commands::anthropic_cancel_oauth,
+            commands::anthropic_logout,
             // Agent Chat
             commands::agent_chat,
             // Model listing

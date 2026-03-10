@@ -1,62 +1,49 @@
 use anyhow::{Context, Result};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
-
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 use super::cache::TrackInfoCache;
 use super::AgentResponse;
 use crate::auth::AnthropicAuth;
 use crate::spotify::TrackInfo;
 
-const MESSAGES_API: &str = "https://api.anthropic.com/v1/messages";
-const API_VERSION: &str = "2023-06-01";
-const MAX_TOKENS: u32 = 4096;
+const TRACK_SYSTEM_PROMPT: &str = "You are a music expert with deep knowledge of musical styles, genres, creators, music theory, music and art history, as well as fascinating stories and trivia. You excel at making music accessible and engaging, effectively conveying knowledge while sparking the listener's curiosity.";
 
 #[derive(Debug, Serialize)]
-struct MessagesRequest {
+#[serde(rename_all = "camelCase")]
+struct ClaudeHelperRequest {
+    oauth_token: String,
     model: String,
-    max_tokens: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
-    messages: Vec<Message>,
-}
-
-#[derive(Debug, Serialize)]
-struct Message {
-    role: String,
-    content: String,
+    system_prompt: String,
+    prompt: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct MessagesResponse {
-    content: Vec<ContentBlock>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ContentBlock {
-    #[serde(rename = "type")]
-    block_type: Option<String>,
-    text: Option<String>,
+struct ClaudeHelperResponse {
+    text: String,
+    #[allow(dead_code)]
+    structured: Option<serde_json::Value>,
 }
 
 pub struct AnthropicService {
-    client: Client,
     auth: Arc<AnthropicAuth>,
+    helper_script_path: PathBuf,
     cache: TrackInfoCache,
 }
 
 impl AnthropicService {
-    pub fn new(auth: Arc<AnthropicAuth>) -> Self {
+    pub fn new(auth: Arc<AnthropicAuth>, helper_script_path: PathBuf) -> Self {
         Self {
-            client: Client::new(),
             auth,
+            helper_script_path,
             cache: TrackInfoCache::default(),
         }
     }
 
-    /// Generate track description using Claude.
-    /// Returns (description, used_web_search). Web search is always false for Anthropic.
     pub async fn get_track_description(
         &self,
         track: &TrackInfo,
@@ -72,74 +59,21 @@ impl AnthropicService {
             return Ok((cached, false));
         }
 
-        let api_key = self
-            .auth
-            .get_api_key()
-            .context("Anthropic API key not available")?;
-
-        let memories_str = if memories.is_empty() {
-            String::new()
-        } else {
-            let items: Vec<String> = memories
-                .iter()
-                .enumerate()
-                .map(|(i, m)| format!("{}. {}", i + 1, m))
-                .collect();
-            format!("User memories:\n{}", items.join("\n"))
-        };
-
         let prompt = prompt_template
             .replace("{name}", &track.name)
             .replace("{artist}", &track.artist)
             .replace("{album}", &track.album)
-            .replace("{memories}", &memories_str);
+            .replace("{memories}", &format_memories(memories));
 
-        let request = MessagesRequest {
-            model: model.to_string(),
-            max_tokens: MAX_TOKENS,
-            system: Some("You are a music expert with deep knowledge of musical styles, genres, creators, music theory, music and art history, as well as fascinating stories and trivia. You excel at making music accessible and engaging, effectively conveying knowledge while sparking the listener's curiosity.".to_string()),
-            messages: vec![Message {
-                role: "user".to_string(),
-                content: prompt,
-            }],
-        };
-
-        let response: MessagesResponse = self
-            .client
-            .post(MESSAGES_API)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", API_VERSION)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()
-            .map_err(|e| {
-                log::error!("[anthropic] API error: {}", e);
-                e
-            })?
-            .json()
-            .await
-            .context("Failed to parse Anthropic response")?;
-
-        let description = response
-            .content
-            .iter()
-            .filter(|b| b.block_type.as_deref() != Some("thinking"))
-            .filter_map(|b| b.text.as_deref())
-            .collect::<Vec<_>>()
-            .join("");
-
+        let description = self.run_prompt(model, TRACK_SYSTEM_PROMPT, &prompt).await?;
         if description.is_empty() {
-            anyhow::bail!("Empty response from Anthropic");
+            anyhow::bail!("Empty response from Claude");
         }
 
-        log::info!("[anthropic] AI description for '{}' generated", track.name);
         self.cache.set(track.id.clone(), description.clone()).await;
-
         Ok((description, false))
     }
 
-    /// Execute agent chat via Claude Messages API.
     pub async fn agent_chat(
         &self,
         messages: &[super::ChatMessage],
@@ -152,69 +86,102 @@ impl AnthropicService {
         _web_search: bool,
         memories: &[String],
     ) -> Result<AgentResponse> {
-        let api_key = self
-            .auth
-            .get_api_key()
-            .context("Anthropic API key not available")?;
-
-        let memories_str = if memories.is_empty() {
-            String::new()
-        } else {
-            let items: Vec<String> = memories
-                .iter()
-                .enumerate()
-                .map(|(i, m)| format!("{}. {}", i + 1, m))
-                .collect();
-            format!("User memories:\n{}", items.join("\n"))
-        };
-
         let system_prompt = prompt_template
             .replace("{name}", track_name)
             .replace("{artist}", artist)
             .replace("{album}", album)
             .replace("{volume}", &volume.to_string())
-            .replace("{memories}", &memories_str);
+            .replace("{memories}", &format_memories(memories));
 
-        let msgs: Vec<Message> = messages
-            .iter()
-            .map(|m| Message {
-                role: m.role.clone(),
-                content: m.content.clone(),
-            })
-            .collect();
-
-        let request = MessagesRequest {
-            model: model.to_string(),
-            max_tokens: MAX_TOKENS,
-            system: Some(system_prompt),
-            messages: msgs,
-        };
-
-        let response: MessagesResponse = self
-            .client
-            .post(MESSAGES_API)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", API_VERSION)
-            .json(&request)
-            .send()
-            .await?
-            .error_for_status()
-            .map_err(|e| {
-                log::error!("[anthropic] Chat API error: {}", e);
-                e
-            })?
-            .json()
-            .await
-            .context("Failed to parse Anthropic chat response")?;
-
-        let text = response
-            .content
-            .iter()
-            .filter(|b| b.block_type.as_deref() != Some("thinking"))
-            .filter_map(|b| b.text.as_deref())
-            .collect::<Vec<_>>()
-            .join("");
-
+        let prompt = format_chat_history(messages);
+        let text = self.run_prompt(model, &system_prompt, &prompt).await?;
         Ok(super::parse_agent_response(&text))
     }
+
+    async fn run_prompt(&self, model: &str, system_prompt: &str, prompt: &str) -> Result<String> {
+        let oauth_token = self.auth.get_access_token().await?;
+        let request = ClaudeHelperRequest {
+            oauth_token,
+            model: model.to_string(),
+            system_prompt: system_prompt.to_string(),
+            prompt: prompt.to_string(),
+        };
+        let payload = serde_json::to_vec(&request)?;
+
+        let mut child = Command::new("node")
+            .arg(&self.helper_script_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| {
+                format!(
+                    "Failed to start Claude helper at {}. Ensure Node.js 18+ is installed.",
+                    self.helper_script_path.display()
+                )
+            })?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("Claude helper stdin was not available")?;
+        stdin.write_all(&payload).await?;
+        drop(stdin);
+
+        let output = child.wait_with_output().await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let detail = if !stderr.is_empty() { stderr } else { stdout };
+            anyhow::bail!(
+                "Claude helper failed{}",
+                if detail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", detail)
+                }
+            );
+        }
+
+        let response: ClaudeHelperResponse =
+            serde_json::from_slice(&output.stdout).context("Failed to parse Claude helper output")?;
+        Ok(response.text)
+    }
+}
+
+fn format_memories(memories: &[String]) -> String {
+    if memories.is_empty() {
+        return String::new();
+    }
+
+    let items: Vec<String> = memories
+        .iter()
+        .enumerate()
+        .map(|(index, memory)| format!("{}. {}", index + 1, memory))
+        .collect();
+    format!("User memories:\n{}", items.join("\n"))
+}
+
+fn format_chat_history(messages: &[super::ChatMessage]) -> String {
+    if messages.is_empty() {
+        return "User:".to_string();
+    }
+
+    let mut transcript = String::from(
+        "Conversation so far:\n\nReply to the latest user message. If you decide to call a tool, return only the JSON object requested in the system prompt.\n\n",
+    );
+
+    for message in messages {
+        let speaker = if message.role == "assistant" {
+            "Assistant"
+        } else {
+            "User"
+        };
+        transcript.push_str(speaker);
+        transcript.push_str(": ");
+        transcript.push_str(&message.content);
+        transcript.push_str("\n\n");
+    }
+
+    transcript
 }

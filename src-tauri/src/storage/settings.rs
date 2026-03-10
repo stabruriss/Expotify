@@ -34,7 +34,7 @@ pub struct Settings {
     /// Custom chat prompt template
     #[serde(default = "default_chat_prompt")]
     pub chat_prompt: String,
-    /// Whether Anthropic (Claude) is activated by the user
+    /// Whether Claude OAuth is connected and should auto-restore on launch
     #[serde(default)]
     pub anthropic_enabled: bool,
     /// User memories (preferences, notes saved by AI)

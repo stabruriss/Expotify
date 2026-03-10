@@ -3,6 +3,7 @@ use crate::auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use crate::lyrics::{LyricsFetcher, LyricsInfo};
 use crate::spotify::{self, SearchResult, SpotifyDevice, SpotifyWebApi, TrackInfo};
 use crate::storage::Settings;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::RwLock;
@@ -54,6 +55,7 @@ pub struct AppState {
     pub openai_service: Arc<RwLock<Option<OpenAIService>>>,
     pub anthropic_auth: Arc<AnthropicAuth>,
     pub anthropic_service: Arc<RwLock<Option<AnthropicService>>>,
+    pub claude_helper_script: PathBuf,
     pub spotify_auth: Arc<SpotifyAuth>,
     pub spotify_webapi: Arc<RwLock<Option<SpotifyWebApi>>>,
     pub settings: Arc<RwLock<Settings>>,
@@ -270,7 +272,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 
 #[tauri::command]
 pub async fn update_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
-    // Preserve anthropic_enabled — only anthropic_activate/deactivate should change it
+    // Preserve anthropic_enabled — only Claude OAuth connect/disconnect should change it
     let current = state.settings.read().await;
     settings.anthropic_enabled = current.anthropic_enabled;
     drop(current);
@@ -284,36 +286,55 @@ pub async fn update_settings(state: State<'_, AppState>, mut settings: Settings)
 #[derive(serde::Serialize)]
 pub struct AuthStatus {
     pub openai: bool,
-    /// Claude is activated and ready to use
+    /// Claude OAuth is connected and ready to use
     pub anthropic: bool,
-    /// Claude API key was found (but may not be activated yet)
+    /// Claude OAuth is supported in this build
     pub anthropic_available: bool,
     pub spotify: bool,
 }
 
 #[tauri::command]
 pub async fn get_auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
-    let key_available = state.anthropic_auth.is_authenticated();
+    let authenticated = state.anthropic_auth.is_authenticated().await;
     let service_active = state.anthropic_service.read().await.is_some();
     Ok(AuthStatus {
         openai: state.openai_auth.is_authenticated().await,
-        anthropic: key_available && service_active,
-        anthropic_available: key_available,
+        anthropic: authenticated && service_active,
+        anthropic_available: true,
         spotify: state.spotify_auth.is_authenticated().await,
     })
 }
 
-// ============ Anthropic Activation ============
+// ============ Anthropic OAuth ============
 
 #[tauri::command]
-pub async fn anthropic_activate(state: State<'_, AppState>) -> Result<(), String> {
-    if !state.anthropic_auth.is_authenticated() {
-        return Err("No Anthropic API key found".to_string());
-    }
-    // Create the service
-    let service = crate::ai::AnthropicService::new(Arc::clone(&state.anthropic_auth));
+pub async fn anthropic_start_oauth(state: State<'_, AppState>) -> Result<(), String> {
+    let auth_url = state
+        .anthropic_auth
+        .get_auth_url()
+        .await
+        .map_err(|e| e.to_string())?;
+    open::that(&auth_url).map_err(|e| format!("Failed to open browser: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn anthropic_complete_oauth(
+    state: State<'_, AppState>,
+    code: String,
+) -> Result<(), String> {
+    state
+        .anthropic_auth
+        .exchange_code(&code)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let service = crate::ai::AnthropicService::new(
+        Arc::clone(&state.anthropic_auth),
+        state.claude_helper_script.clone(),
+    );
     *state.anthropic_service.write().await = Some(service);
-    // Persist the activation
+
     let mut settings = state.settings.write().await;
     settings.anthropic_enabled = true;
     settings.save().map_err(|e| e.to_string())?;
@@ -321,7 +342,18 @@ pub async fn anthropic_activate(state: State<'_, AppState>) -> Result<(), String
 }
 
 #[tauri::command]
-pub async fn anthropic_deactivate(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn anthropic_cancel_oauth(state: State<'_, AppState>) -> Result<(), String> {
+    state.anthropic_auth.clear_pending_oauth().await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn anthropic_logout(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .anthropic_auth
+        .logout()
+        .await
+        .map_err(|e| e.to_string())?;
     *state.anthropic_service.write().await = None;
     let mut settings = state.settings.write().await;
     settings.anthropic_enabled = false;
@@ -691,7 +723,7 @@ pub async fn agent_chat(
         let service = state.anthropic_service.read().await;
         let anthropic = service
             .as_ref()
-            .ok_or("Anthropic not connected. API key not found.")?;
+            .ok_or("Claude not connected. Please sign in first.")?;
         anthropic
             .agent_chat(
                 &messages,
@@ -978,18 +1010,6 @@ pub struct ModelInfo {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct AnthropicModel {
-    id: String,
-    display_name: String,
-    created_at: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct AnthropicModelsResponse {
-    data: Vec<AnthropicModel>,
-}
-
-#[derive(Debug, serde::Deserialize)]
 struct CodexModel {
     slug: String,
     display_name: String,
@@ -1009,31 +1029,19 @@ pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, S
     let client = reqwest::Client::new();
     let mut models: Vec<ModelInfo> = Vec::new();
 
-    // Fetch Anthropic models
-    if let Some(api_key) = state.anthropic_auth.get_api_key() {
-        match client
-            .get("https://api.anthropic.com/v1/models")
-            .header("x-api-key", api_key)
-            .header("anthropic-version", "2023-06-01")
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if let Ok(data) = resp.json::<AnthropicModelsResponse>().await {
-                    let mut sorted = data.data;
-                    sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                    for m in sorted.into_iter().take(7) {
-                        models.push(ModelInfo {
-                            id: m.id,
-                            name: m.display_name,
-                            provider: "anthropic".to_string(),
-                            created_at: m.created_at,
-                        });
-                    }
-                }
-            }
-            Err(e) => log::warn!("Failed to fetch Anthropic models: {}", e),
-        }
+    if state.anthropic_auth.is_authenticated().await {
+        models.push(ModelInfo {
+            id: "claude-sonnet-4-6".to_string(),
+            name: "Claude Sonnet 4.6".to_string(),
+            provider: "anthropic".to_string(),
+            created_at: String::new(),
+        });
+        models.push(ModelInfo {
+            id: "claude-opus-4-6".to_string(),
+            name: "Claude Opus 4.6".to_string(),
+            provider: "anthropic".to_string(),
+            created_at: String::new(),
+        });
     }
 
     // Fetch OpenAI/Codex models from ChatGPT backend API

@@ -77,12 +77,20 @@ export async function getAuthStatus(): Promise<AuthStatus> {
 
 // ============ Anthropic ============
 
-export async function anthropicActivate(): Promise<void> {
-  return invoke("anthropic_activate");
+export async function anthropicStartOAuth(): Promise<void> {
+  return invoke("anthropic_start_oauth");
 }
 
-export async function anthropicDeactivate(): Promise<void> {
-  return invoke("anthropic_deactivate");
+export async function anthropicCompleteOAuth(code: string): Promise<void> {
+  return invoke("anthropic_complete_oauth", { code });
+}
+
+export async function anthropicCancelOAuth(): Promise<void> {
+  return invoke("anthropic_cancel_oauth");
+}
+
+export async function anthropicLogout(): Promise<void> {
+  return invoke("anthropic_logout");
 }
 
 // ============ Window Commands ============
