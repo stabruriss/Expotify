@@ -14,6 +14,9 @@ pub struct TrackInfo {
     pub spotify_url: Option<String>,
     /// AI-generated description about the track
     pub ai_description: Option<String>,
+    /// AI fetch error for the current track, if any
+    #[serde(default)]
+    pub ai_error: Option<String>,
     /// Whether the AI description used web search
     #[serde(default)]
     pub ai_used_web_search: bool,

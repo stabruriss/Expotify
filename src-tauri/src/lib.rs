@@ -15,21 +15,44 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use storage::Settings;
 use tauri::menu::{Menu, MenuItem};
-use tauri::path::BaseDirectory;
 use tauri::Manager;
 use tauri::RunEvent;
 use tokio::sync::RwLock;
 
 fn claude_helper_script_path(app: &tauri::App) -> Result<PathBuf, String> {
     if cfg!(debug_assertions) {
-        return Ok(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/claude-helper/runner.mjs"),
-        );
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/claude-helper/runner.mjs");
+        if path.is_file() {
+            return Ok(path);
+        }
+
+        return Err(format!(
+            "Claude helper script not found at {}",
+            path.display()
+        ));
     }
 
-    app.path()
-        .resolve("claude-helper/runner.mjs", BaseDirectory::Resource)
-        .map_err(|e| e.to_string())
+    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
+    let candidates = [
+        resource_dir.join("claude-helper/runner.mjs"),
+        resource_dir.join("claudehelper/runner.mjs"),
+    ];
+
+    candidates
+        .iter()
+        .find(|path| path.is_file())
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Claude helper script not found. Checked: {}",
+                candidates
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -57,21 +80,21 @@ pub fn run() {
             // Load settings early to check anthropic_enabled
             let settings = Settings::load().unwrap_or_default();
 
-            let anthropic_service = if anthropic_auth.has_stored_token() && settings.anthropic_enabled
-            {
-                log::info!("[setup] Claude OAuth token detected and enabled, creating service");
-                Arc::new(RwLock::new(Some(AnthropicService::new(
-                    Arc::clone(&anthropic_auth),
-                    claude_helper_script.clone(),
-                ))))
-            } else {
-                if anthropic_auth.has_stored_token() {
-                    log::info!("[setup] Claude OAuth token detected but not activated by user");
+            let anthropic_service =
+                if anthropic_auth.has_stored_token() && settings.anthropic_enabled {
+                    log::info!("[setup] Claude OAuth token detected and enabled, creating service");
+                    Arc::new(RwLock::new(Some(AnthropicService::new(
+                        Arc::clone(&anthropic_auth),
+                        claude_helper_script.clone(),
+                    ))))
                 } else {
-                    log::info!("[setup] Claude OAuth token not found");
-                }
-                Arc::new(RwLock::new(None))
-            };
+                    if anthropic_auth.has_stored_token() {
+                        log::info!("[setup] Claude OAuth token detected but not activated by user");
+                    } else {
+                        log::info!("[setup] Claude OAuth token not found");
+                    }
+                    Arc::new(RwLock::new(None))
+                };
 
             // Spotify auth: sp_dc cookie loaded from keychain
             let spotify_auth = Arc::new(SpotifyAuth::new());

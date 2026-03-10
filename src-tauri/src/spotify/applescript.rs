@@ -105,6 +105,7 @@ end tell
             Some(parts[6].to_string())
         },
         ai_description: None,
+        ai_error: None,
         ai_used_web_search: false,
     }))
 }

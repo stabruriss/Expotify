@@ -720,6 +720,12 @@ body {
   margin-top: 4px;
 }
 
+.ai-fetch-error {
+  margin: 0 0 10px;
+  font-size: 0.76rem;
+  color: #ff6b6b;
+}
+
 .spotify-connected {
   display: flex;
   align-items: center;

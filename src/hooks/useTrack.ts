@@ -67,17 +67,9 @@ export function useTrack(options: UseTrackOptions = {}) {
     }
     try {
       const aiTrack = await getCurrentTrackWithAi(force);
-      setAiError(null);
       if (aiTrack && aiTrack.id === lastTrackId.current) {
-        setTrack((prev) =>
-          prev && prev.id === aiTrack.id
-            ? {
-                ...prev,
-                ai_description: aiTrack.ai_description,
-                ai_used_web_search: aiTrack.ai_used_web_search,
-              }
-            : prev
-        );
+        setAiError(aiTrack.ai_error ?? null);
+        setTrack((prev) => (prev && prev.id !== aiTrack.id ? prev : aiTrack));
         if (aiTrack.ai_description) {
           fetchNonceRef.current += 1;
           setLastAiFetch({
@@ -114,6 +106,7 @@ export function useTrack(options: UseTrackOptions = {}) {
       if (!running) {
         setTrack(null);
         lastTrackId.current = null;
+        setAiError(null);
         return;
       }
 
@@ -122,6 +115,7 @@ export function useTrack(options: UseTrackOptions = {}) {
       if (trackInfo) {
         if (trackInfo.id !== lastTrackId.current) {
           lastTrackId.current = trackInfo.id;
+          setAiError(null);
           setTrack(trackInfo);
 
           // Auto-fetch only for uncached tracks when enabled.
@@ -142,6 +136,7 @@ export function useTrack(options: UseTrackOptions = {}) {
       } else {
         setTrack(null);
         lastTrackId.current = null;
+        setAiError(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

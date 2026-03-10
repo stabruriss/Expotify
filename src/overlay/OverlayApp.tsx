@@ -634,12 +634,13 @@ export default function OverlayApp() {
     }
     if (activePanel === "ai") {
       setActivePanel(null);
-    } else if (displayedAi) {
+    } else if (displayedAi || aiError || aiLoading) {
       setActivePanel("ai");
     } else {
+      setActivePanel("ai");
       await fetchAi({ source: "manual" });
     }
-  }, [activePanel, displayedAi, fetchAi, isAuthenticated]);
+  }, [activePanel, aiError, aiLoading, displayedAi, fetchAi, isAuthenticated]);
 
   const handleRegenerate = useCallback(async () => {
     await fetchAi({ force: true, source: "manual" });
@@ -1105,7 +1106,7 @@ export default function OverlayApp() {
             <button
               className={aiStampImg ? "overlay-ai-btn" : "overlay-ai-btn-text"}
               onClick={handleAiInsight}
-              disabled={aiLoading && !displayedAi}
+              disabled={aiLoading && !displayedAi && !aiError}
             >
               {aiStampImg ? (
                 <img className="overlay-ai-stamp" src={aiStampImg} alt="AI" draggable={false} />
@@ -1113,7 +1114,7 @@ export default function OverlayApp() {
                 "AI"
               )}
             </button>
-            <span className={getLedClass(aiLoading, !!displayedAi)} />
+            <span className={getLedClass(aiLoading, !!displayedAi || !!aiError)} />
           </div>
         </div>
 
@@ -1210,6 +1211,20 @@ export default function OverlayApp() {
           </div>
         </div>
 
+        {aiError && (
+          <div
+            data-no-drag="true"
+            style={{
+              margin: "2px 0 8px",
+              color: "rgba(255, 121, 121, 0.92)",
+              fontSize: "10px",
+              lineHeight: 1.35,
+            }}
+          >
+            {aiError}
+          </div>
+        )}
+
         {/* Body: lyrics + panel overlays */}
         <div className="overlay-body" onWheel={handleLyricsWheel}>
           {/* Refresh lyrics button */}
@@ -1279,7 +1294,7 @@ export default function OverlayApp() {
           </div>
 
           {/* AI Insight panel */}
-          {activePanel === "ai" && displayedAi && (
+          {activePanel === "ai" && (
             <div className="overlay-panel" data-no-drag="true">
               <div className="overlay-panel-bg" />
               <button className="overlay-panel-close" onClick={() => setActivePanel(null)} title="Close">
@@ -1295,6 +1310,7 @@ export default function OverlayApp() {
                       className={`overlay-ai-read-btn${isReading ? " reading" : ""}`}
                       data-no-drag="true"
                       onClick={toggleManualRead}
+                      disabled={!displayedAi}
                     >
                       {isReading ? (
                         <>
@@ -1374,9 +1390,19 @@ export default function OverlayApp() {
                   </div>
                 </div>
                 <div className="overlay-ai-text">
-                  <Markdown>{displayedAi}</Markdown>
-                  {track.ai_used_web_search && (
-                    <span className="overlay-ai-web-badge">web</span>
+                  {displayedAi ? (
+                    <>
+                      <Markdown>{displayedAi}</Markdown>
+                      {track?.ai_used_web_search && (
+                        <span className="overlay-ai-web-badge">web</span>
+                      )}
+                    </>
+                  ) : aiLoading ? (
+                    <p className="overlay-ai-placeholder">Generating AI insight...</p>
+                  ) : aiError ? (
+                    <p className="overlay-ai-error">{aiError}</p>
+                  ) : (
+                    <p className="overlay-ai-placeholder">No AI insight yet for this track.</p>
                   )}
                 </div>
                 <div className="overlay-ai-footer">
@@ -1385,7 +1411,15 @@ export default function OverlayApp() {
                     onClick={handleRegenerate}
                     disabled={aiLoading || regenCooldown}
                   >
-                    {aiLoading ? "Generating..." : regenCooldown ? "Cooldown..." : "Regenerate"}
+                    {aiLoading
+                      ? "Generating..."
+                      : regenCooldown
+                        ? "Cooldown..."
+                        : displayedAi
+                          ? "Regenerate"
+                          : aiError
+                            ? "Retry"
+                            : "Generate"}
                   </button>
                 </div>
               </div>

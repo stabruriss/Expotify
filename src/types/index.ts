@@ -9,6 +9,7 @@ export interface TrackInfo {
   is_playing: boolean;
   spotify_url: string | null;
   ai_description: string | null;
+  ai_error?: string | null;
   ai_used_web_search: boolean;
 }
 

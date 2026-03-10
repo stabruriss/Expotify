@@ -26,7 +26,7 @@ function buildOptions(request) {
     permissionMode: "dontAsk",
     persistSession: false,
     cwd: process.cwd(),
-    executable: "node",
+    executable: process.execPath,
     pathToClaudeCodeExecutable: cliPath,
     env: {
       ...process.env,

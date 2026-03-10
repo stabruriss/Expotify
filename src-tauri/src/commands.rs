@@ -197,10 +197,12 @@ pub async fn get_current_track_with_ai(
         match result {
             Ok((description, used_web_search)) => {
                 info.ai_description = Some(description);
+                info.ai_error = None;
                 info.ai_used_web_search = used_web_search;
             }
             Err(e) => {
                 log::warn!("Failed to get AI description: {}", e);
+                info.ai_error = Some(e.to_string());
             }
         }
     }
@@ -271,7 +273,10 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 #[tauri::command]
-pub async fn update_settings(state: State<'_, AppState>, mut settings: Settings) -> Result<(), String> {
+pub async fn update_settings(
+    state: State<'_, AppState>,
+    mut settings: Settings,
+) -> Result<(), String> {
     // Preserve anthropic_enabled — only Claude OAuth connect/disconnect should change it
     let current = state.settings.read().await;
     settings.anthropic_enabled = current.anthropic_enabled;
@@ -782,8 +787,7 @@ pub async fn agent_chat(
                     match search_result {
                         Ok(results) if !results.is_empty() => {
                             let track = &results[0];
-                            result_track_name =
-                                Some(format!("{} - {}", track.name, track.artist));
+                            result_track_name = Some(format!("{} - {}", track.name, track.artist));
                             let uri = track.uri.clone();
                             match tokio::task::spawn_blocking(move || {
                                 spotify::applescript::spotify_play_track(&uri)
@@ -795,20 +799,17 @@ pub async fn agent_chat(
                                 }
                                 Ok(Err(e)) => {
                                     log::warn!("AppleScript play failed: {}", e);
-                                    action_error =
-                                        Some(format!("Failed to play track: {}", e));
+                                    action_error = Some(format!("Failed to play track: {}", e));
                                 }
                                 Err(e) => {
                                     log::warn!("AppleScript play spawn failed: {}", e);
-                                    action_error =
-                                        Some(format!("Failed to play track: {}", e));
+                                    action_error = Some(format!("Failed to play track: {}", e));
                                 }
                             }
                         }
                         Ok(_) => {
                             log::warn!("No search results for: {}", query);
-                            action_error =
-                                Some(format!("No search results for: {}", query));
+                            action_error = Some(format!("No search results for: {}", query));
                         }
                         Err(e) => {
                             log::warn!("Search failed: {}", e);

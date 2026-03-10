@@ -37,6 +37,7 @@ function App() {
   const {
     track,
     aiLoading,
+    aiError,
     regenCooldown,
     error: trackError,
     spotifyRunning,
@@ -281,6 +282,7 @@ function App() {
           </div>
 
           {/* AI section */}
+          {aiError && <p className="ai-fetch-error">{aiError}</p>}
           {displayedAi ? (
             <>
               <div className="ai-description">

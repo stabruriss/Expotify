@@ -703,6 +703,17 @@ html, body, #root {
   background: rgba(254,223,225,0.22);
 }
 
+.overlay-ai-read-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.overlay-ai-read-btn:disabled:hover {
+  background: none;
+  border-color: rgba(254,223,225,0.25);
+  color: rgba(254,223,225,0.55);
+}
+
 .overlay-ai-text {
   font-size: 19px;
   line-height: 1.55;
@@ -716,6 +727,15 @@ html, body, #root {
 
 .overlay-ai-text p:last-child {
   margin-bottom: 0;
+}
+
+.overlay-ai-placeholder {
+  color: rgba(254,223,225,0.56);
+}
+
+.overlay-ai-error {
+  color: rgba(255, 134, 134, 0.96);
+  word-break: break-word;
 }
 
 .overlay-ai-web-badge {
@@ -763,6 +783,7 @@ html, body, #root {
 .overlay-ai-regen:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  color: rgba(254,223,225,0.22);
 }
 
 
