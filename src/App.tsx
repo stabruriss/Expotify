@@ -86,6 +86,20 @@ function App() {
     });
   }, [dynamicModels, authStatus.openai, authStatus.anthropic]);
 
+  useEffect(() => {
+    if (availableModels.length === 0) return;
+    const availableIds = new Set(availableModels.map((m) => m.id));
+    const fallbackModel = availableModels[0]?.id ?? "";
+
+    if (draftModel && !availableIds.has(draftModel)) {
+      setDraftModel(fallbackModel);
+    }
+
+    if (draftChatModel && !availableIds.has(draftChatModel)) {
+      setDraftChatModel(fallbackModel);
+    }
+  }, [availableModels, draftModel, draftChatModel]);
+
   // Read AI insight from localStorage cache when track changes
   useEffect(() => {
     if (track?.id) {

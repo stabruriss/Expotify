@@ -63,6 +63,84 @@ pub struct AppState {
     pub lyrics_fetcher: LyricsFetcher,
 }
 
+fn model_provider(model: &str) -> &'static str {
+    if model.starts_with("claude-") {
+        "anthropic"
+    } else {
+        "openai"
+    }
+}
+
+async fn resolve_connected_model(
+    state: &AppState,
+    preferred: &str,
+    alternate: &str,
+) -> Result<String, String> {
+    let openai_available = state.openai_service.read().await.is_some();
+    let anthropic_available = state.anthropic_service.read().await.is_some();
+
+    let is_available = |model: &str| match model_provider(model) {
+        "anthropic" => anthropic_available,
+        _ => openai_available,
+    };
+
+    if !preferred.is_empty() && is_available(preferred) {
+        return Ok(preferred.to_string());
+    }
+
+    if !alternate.is_empty() && is_available(alternate) {
+        log::warn!(
+            "Preferred model '{}' unavailable, falling back to '{}'",
+            preferred,
+            alternate
+        );
+        return Ok(alternate.to_string());
+    }
+
+    if openai_available {
+        let fallback = if model_provider(alternate) == "openai" && !alternate.is_empty() {
+            alternate.to_string()
+        } else {
+            "gpt-5.2".to_string()
+        };
+        if fallback != preferred {
+            log::warn!(
+                "Preferred model '{}' unavailable, falling back to '{}'",
+                preferred,
+                fallback
+            );
+        }
+        return Ok(fallback);
+    }
+
+    if anthropic_available {
+        let fallback = if model_provider(alternate) == "anthropic" && !alternate.is_empty() {
+            alternate.to_string()
+        } else {
+            "claude-sonnet-4-6".to_string()
+        };
+        if fallback != preferred {
+            log::warn!(
+                "Preferred model '{}' unavailable, falling back to '{}'",
+                preferred,
+                fallback
+            );
+        }
+        return Ok(fallback);
+    }
+
+    let provider = if model_provider(preferred) == "anthropic" {
+        "Claude"
+    } else {
+        "ChatGPT"
+    };
+
+    Err(format!(
+        "Selected model '{}' requires {} to be connected. Update Settings to use a connected model.",
+        preferred, provider
+    ))
+}
+
 // ============ Spotify Status ============
 
 #[tauri::command]
@@ -149,11 +227,22 @@ pub async fn get_current_track_with_ai(
 
     // Get AI description — route by model prefix
     let settings = state.settings.read().await;
-    let model = settings.ai_model.clone();
+    let preferred_model = settings.ai_model.clone();
+    let alternate_model = settings.chat_model.clone();
     let prompt = settings.ai_prompt.clone();
     let web_search = settings.ai_web_search;
     let memories = settings.memories.clone();
     drop(settings);
+
+    let model =
+        match resolve_connected_model(state.inner(), &preferred_model, &alternate_model).await {
+            Ok(model) => model,
+            Err(error) => {
+                info.ai_error = Some(error);
+                *state.current_track.write().await = Some(info.clone());
+                return Ok(Some(info));
+            }
+        };
 
     let ai_result = if model.starts_with("claude-") {
         let service = state.anthropic_service.read().await;
@@ -338,6 +427,19 @@ pub async fn anthropic_complete_oauth(
         Arc::clone(&state.anthropic_auth),
         state.claude_helper_script.clone(),
     );
+
+    if let Err(error) = service.probe_connection().await {
+        let _ = state.anthropic_auth.logout().await;
+        *state.anthropic_service.write().await = None;
+        let mut settings = state.settings.write().await;
+        settings.anthropic_enabled = false;
+        let _ = settings.save();
+        return Err(format!(
+            "Claude browser auth succeeded, but the connection probe failed: {}",
+            error
+        ));
+    }
+
     *state.anthropic_service.write().await = Some(service);
 
     let mut settings = state.settings.write().await;
@@ -694,15 +796,18 @@ pub async fn agent_chat(
     messages: Vec<ChatMessage>,
 ) -> Result<AgentChatResult, String> {
     let settings = state.settings.read().await;
-    let model = if settings.chat_model.is_empty() {
+    let preferred_model = if settings.chat_model.is_empty() {
         settings.ai_model.clone()
     } else {
         settings.chat_model.clone()
     };
+    let alternate_model = settings.ai_model.clone();
     let chat_prompt = settings.chat_prompt.clone();
     let web_search = settings.ai_web_search;
     let memories = settings.memories.clone();
     drop(settings);
+
+    let model = resolve_connected_model(state.inner(), &preferred_model, &alternate_model).await?;
 
     // Get current track info for context
     let current = state.current_track.read().await;

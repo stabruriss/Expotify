@@ -100,6 +100,22 @@ impl AnthropicService {
         Ok(super::parse_agent_response(&text))
     }
 
+    pub async fn probe_connection(&self) -> Result<()> {
+        let response = self
+            .run_prompt(
+                "claude-sonnet-4-6",
+                "You are a connection health check. Reply with exactly OK.",
+                "Reply with exactly OK.",
+            )
+            .await?;
+
+        if response.trim().is_empty() {
+            anyhow::bail!("Claude probe returned an empty response");
+        }
+
+        Ok(())
+    }
+
     async fn run_prompt(&self, model: &str, system_prompt: &str, prompt: &str) -> Result<String> {
         let oauth_token = self.auth.get_access_token().await?;
         let request = ClaudeHelperRequest {

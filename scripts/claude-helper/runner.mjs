@@ -37,6 +37,70 @@ function buildOptions(request) {
   };
 }
 
+function summarizeAccountInfo(account) {
+  if (!account) return null;
+
+  const parts = [];
+  if (account.email) parts.push(`email=${account.email}`);
+  if (account.organization) parts.push(`org=${account.organization}`);
+  if (account.subscriptionType) parts.push(`subscription=${account.subscriptionType}`);
+  if (account.tokenSource) parts.push(`tokenSource=${account.tokenSource}`);
+  if (account.apiKeySource) parts.push(`apiKeySource=${account.apiKeySource}`);
+  return parts.join(", ");
+}
+
+function summarizeRateLimitInfo(info) {
+  if (!info) return null;
+
+  const parts = [];
+  if (info.status) parts.push(`status=${info.status}`);
+  if (info.rateLimitType) parts.push(`type=${info.rateLimitType}`);
+  if (typeof info.utilization === "number") parts.push(`utilization=${info.utilization}`);
+  if (info.overageStatus) parts.push(`overageStatus=${info.overageStatus}`);
+  if (info.overageDisabledReason) {
+    parts.push(`overageDisabledReason=${info.overageDisabledReason}`);
+  }
+  if (info.isUsingOverage !== undefined) parts.push(`isUsingOverage=${info.isUsingOverage}`);
+  if (info.resetsAt) parts.push(`resetsAt=${info.resetsAt}`);
+  if (info.overageResetsAt) parts.push(`overageResetsAt=${info.overageResetsAt}`);
+  return parts.join(", ");
+}
+
+function summarizeAuthStatusMessage(msg) {
+  const parts = [`isAuthenticating=${msg.isAuthenticating}`];
+  if (Array.isArray(msg.output) && msg.output.length > 0) {
+    parts.push(`output=${msg.output.join(" / ")}`);
+  }
+  if (msg.error) {
+    parts.push(`error=${msg.error}`);
+  }
+  return parts.join(", ");
+}
+
+function formatDiagnosticError(error, diagnostics) {
+  const parts = [error instanceof Error ? error.message : String(error)];
+
+  const account = summarizeAccountInfo(diagnostics.account);
+  if (account) parts.push(`account=${account}`);
+  if (diagnostics.accountError) parts.push(`accountError=${diagnostics.accountError}`);
+  if (diagnostics.assistantErrors.length > 0) {
+    parts.push(`assistantErrors=${diagnostics.assistantErrors.join(",")}`);
+  }
+  if (diagnostics.resultErrors.length > 0) {
+    parts.push(`resultErrors=${diagnostics.resultErrors.join(" ; ")}`);
+  }
+  const rateLimit = summarizeRateLimitInfo(diagnostics.rateLimitInfo);
+  if (rateLimit) parts.push(`rateLimit=${rateLimit}`);
+  if (diagnostics.authStatusMessages.length > 0) {
+    parts.push(`authStatus=${diagnostics.authStatusMessages.join(" || ")}`);
+  }
+  if (diagnostics.messageFlow.length > 0) {
+    parts.push(`messageFlow=${diagnostics.messageFlow.join(",")}`);
+  }
+
+  return parts.join(" | ");
+}
+
 async function runPrompt(request) {
   if (!request?.oauthToken) {
     throw new Error("Claude OAuth token is missing");
@@ -46,28 +110,66 @@ async function runPrompt(request) {
   }
 
   const options = buildOptions(request);
+  const session = query({ prompt: request.prompt, options });
   let text = "";
   let structured = undefined;
+  const diagnostics = {
+    account: null,
+    accountError: null,
+    assistantErrors: [],
+    resultErrors: [],
+    rateLimitInfo: null,
+    authStatusMessages: [],
+    messageFlow: [],
+  };
 
-  for await (const msg of query({ prompt: request.prompt, options })) {
-    if (msg.type === "assistant") {
-      if (msg.error) {
-        throw new Error(`Claude assistant error: ${msg.error}`);
-      }
-      for (const block of msg.message.content) {
-        if (block.type === "text") {
-          text += block.text;
+  try {
+    try {
+      diagnostics.account = await session.accountInfo();
+    } catch (error) {
+      diagnostics.accountError = error instanceof Error ? error.message : String(error);
+    }
+
+    for await (const msg of session) {
+      diagnostics.messageFlow.push(
+        msg.type === "result" ? `result:${msg.subtype}` : msg.type
+      );
+
+      if (msg.type === "assistant") {
+        if (msg.error) {
+          diagnostics.assistantErrors.push(msg.error);
+          throw new Error(`Claude assistant error: ${msg.error}`);
         }
+        for (const block of msg.message.content) {
+          if (block.type === "text") {
+            text += block.text;
+          }
+        }
+        continue;
       }
-      continue;
-    }
 
-    if (msg.type === "result") {
-      if (msg.subtype !== "success") {
-        throw new Error(msg.errors?.join("; ") || "Claude query failed");
+      if (msg.type === "auth_status") {
+        diagnostics.authStatusMessages.push(summarizeAuthStatusMessage(msg));
+        continue;
       }
-      structured = msg.structured_output;
+
+      if (msg.type === "rate_limit_event") {
+        diagnostics.rateLimitInfo = msg.rate_limit_info;
+        continue;
+      }
+
+      if (msg.type === "result") {
+        if (msg.subtype !== "success") {
+          diagnostics.resultErrors.push(...(msg.errors ?? []));
+          throw new Error(msg.errors?.join("; ") || "Claude query failed");
+        }
+        structured = msg.structured_output;
+      }
     }
+  } catch (error) {
+    throw new Error(formatDiagnosticError(error, diagnostics));
+  } finally {
+    session.close();
   }
 
   return {

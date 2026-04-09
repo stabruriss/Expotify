@@ -11,11 +11,11 @@ use url::Url;
 
 use super::keychain::KeychainStorage;
 
-const CLAUDE_AUTH_URL: &str = "https://claude.ai/oauth/authorize";
-const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
+const CLAUDE_AUTH_URL: &str = "https://claude.com/cai/oauth/authorize";
+const CLAUDE_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const CLAUDE_REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
-const CLAUDE_SCOPES: &str = "org:create_api_key user:profile user:inference";
+const CLAUDE_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
+const CLAUDE_SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 const KEYCHAIN_KEY: &str = "anthropic_oauth_token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,14 +156,6 @@ impl AnthropicAuth {
             .client
             .post(CLAUDE_TOKEN_URL)
             .header("Content-Type", "application/json")
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            )
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Accept-Language", "en-US,en;q=0.9")
-            .header("Referer", "https://claude.ai/")
-            .header("Origin", "https://claude.ai")
             .json(&serde_json::json!({
                 "grant_type": "authorization_code",
                 "client_id": CLAUDE_CLIENT_ID,
@@ -186,14 +178,6 @@ impl AnthropicAuth {
             .client
             .post(CLAUDE_TOKEN_URL)
             .header("Content-Type", "application/json")
-            .header(
-                "User-Agent",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            )
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Accept-Language", "en-US,en;q=0.9")
-            .header("Referer", "https://claude.ai/")
-            .header("Origin", "https://claude.ai")
             .json(&serde_json::json!({
                 "grant_type": "refresh_token",
                 "refresh_token": refresh_token,

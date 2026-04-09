@@ -1,6 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde_json::Value;
 use std::sync::Arc;
 
 use super::cache::TrackInfoCache;
@@ -30,35 +31,6 @@ struct Tool {
 struct InputMessage {
     role: String,
     content: String,
-}
-
-// SSE response parsing types
-#[derive(Debug, Deserialize)]
-struct CompletedEvent {
-    response: CompletedResponse,
-}
-
-#[derive(Debug, Deserialize)]
-struct CompletedResponse {
-    output: Vec<OutputItem>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type")]
-enum OutputItem {
-    #[serde(rename = "reasoning")]
-    Reasoning {},
-    #[serde(rename = "message")]
-    Message { content: Vec<ContentPart> },
-    #[serde(rename = "web_search_call")]
-    WebSearchCall {},
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Deserialize)]
-struct ContentPart {
-    text: String,
 }
 
 pub struct OpenAIService {
@@ -237,31 +209,162 @@ impl OpenAIService {
 /// Parse SSE response to extract the final text output and whether web search was used.
 /// Returns (text, used_web_search).
 fn parse_sse_response(body: &str) -> Result<(String, bool)> {
+    let mut used_web_search = false;
+    let mut completed_text = None;
+    let mut streamed_text = String::new();
+
     for chunk in body.split("\n\n") {
         for line in chunk.lines() {
             if let Some(data) = line.strip_prefix("data: ") {
-                if let Ok(event) = serde_json::from_str::<CompletedEvent>(data) {
-                    let mut text = None;
-                    let mut used_web_search = false;
-                    for item in &event.response.output {
-                        match item {
-                            OutputItem::WebSearchCall {} => {
-                                used_web_search = true;
-                            }
-                            OutputItem::Message { content } => {
-                                if let Some(part) = content.first() {
-                                    text = Some(part.text.clone());
-                                }
-                            }
-                            _ => {}
+                if data == "[DONE]" {
+                    continue;
+                }
+
+                let Ok(event) = serde_json::from_str::<Value>(data) else {
+                    continue;
+                };
+
+                match event.get("type").and_then(Value::as_str) {
+                    Some("response.output_text.delta") => {
+                        if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                            streamed_text.push_str(delta);
                         }
                     }
-                    if let Some(t) = text {
-                        return Ok((t, used_web_search));
+                    Some("response.output_text.done") => {
+                        if let Some(text) = event.get("text").and_then(Value::as_str) {
+                            streamed_text.push_str(text);
+                        }
+                    }
+                    Some("response.content_part.done") => {
+                        if let Some(part) = event.get("part") {
+                            append_text_part(part, &mut streamed_text);
+                        }
+                    }
+                    _ => {
+                        let (text, event_used_web_search) = extract_completed_text(&event);
+                        used_web_search |= event_used_web_search;
+                        if !text.trim().is_empty() {
+                            completed_text = Some(text);
+                        }
                     }
                 }
             }
         }
     }
+
+    if let Some(text) = completed_text {
+        return Ok((text, used_web_search));
+    }
+
+    if !streamed_text.trim().is_empty() {
+        return Ok((streamed_text, used_web_search));
+    }
+
     anyhow::bail!("No text output found in response")
+}
+
+fn extract_completed_text(event: &Value) -> (String, bool) {
+    let mut used_web_search = false;
+    let mut text = String::new();
+
+    let Some(output) = event
+        .get("response")
+        .and_then(|response| response.get("output"))
+        .and_then(Value::as_array)
+    else {
+        return (text, used_web_search);
+    };
+
+    for item in output {
+        match item.get("type").and_then(Value::as_str) {
+            Some("web_search_call") => {
+                used_web_search = true;
+            }
+            Some("message") => {
+                if let Some(content) = item.get("content").and_then(Value::as_array) {
+                    for part in content {
+                        append_text_part(part, &mut text);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (text, used_web_search)
+}
+
+fn append_text_part(part: &Value, target: &mut String) {
+    match part.get("type").and_then(Value::as_str) {
+        Some("output_text") | Some("text") => {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                target.push_str(text);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_sse_response;
+
+    #[test]
+    fn parses_completed_output_text_content() {
+        let body = concat!(
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[",
+            "{\"type\":\"reasoning\",\"content\":[],\"summary\":[]},",
+            "{\"type\":\"message\",\"content\":[",
+            "{\"type\":\"output_text\",\"text\":\"hello world\",\"annotations\":[]}",
+            "]}]}}\n\n"
+        );
+
+        let (text, used_web_search) = parse_sse_response(body).unwrap();
+        assert_eq!(text, "hello world");
+        assert!(!used_web_search);
+    }
+
+    #[test]
+    fn parses_completed_message_with_non_text_part_before_output_text() {
+        let body = concat!(
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[",
+            "{\"type\":\"message\",\"content\":[",
+            "{\"type\":\"refusal\",\"refusal\":\"nope\"},",
+            "{\"type\":\"output_text\",\"text\":\"usable text\",\"annotations\":[]}",
+            "]}]}}\n\n"
+        );
+
+        let (text, used_web_search) = parse_sse_response(body).unwrap();
+        assert_eq!(text, "usable text");
+        assert!(!used_web_search);
+    }
+
+    #[test]
+    fn falls_back_to_streamed_output_text_events() {
+        let body = concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"stream \"}\n\n",
+            "data: {\"type\":\"response.output_text.done\",\"text\":\"done\"}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let (text, used_web_search) = parse_sse_response(body).unwrap();
+        assert_eq!(text, "stream done");
+        assert!(!used_web_search);
+    }
+
+    #[test]
+    fn reports_web_search_usage_from_completed_event() {
+        let body = concat!(
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[",
+            "{\"type\":\"web_search_call\"},",
+            "{\"type\":\"message\",\"content\":[",
+            "{\"type\":\"output_text\",\"text\":\"with search\",\"annotations\":[]}",
+            "]}]}}\n\n"
+        );
+
+        let (text, used_web_search) = parse_sse_response(body).unwrap();
+        assert_eq!(text, "with search");
+        assert!(used_web_search);
+    }
 }
