@@ -42,6 +42,7 @@ export function useTrack(options: UseTrackOptions = {}) {
   const regenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFetchRef = useRef<PendingFetch | null>(null);
   const fetchAiRef = useRef<(options?: FetchAiOptions) => Promise<void>>(async () => {});
+  const trackFetchInFlightRef = useRef(false);
   const fetchNonceRef = useRef(0);
 
   // Keep ref in sync with prop
@@ -97,6 +98,9 @@ export function useTrack(options: UseTrackOptions = {}) {
   fetchAiRef.current = fetchAi;
 
   const fetchTrack = useCallback(async () => {
+    if (trackFetchInFlightRef.current) return;
+    trackFetchInFlightRef.current = true;
+
     try {
       setError(null);
 
@@ -140,6 +144,8 @@ export function useTrack(options: UseTrackOptions = {}) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      trackFetchInFlightRef.current = false;
     }
   }, [fetchAi]);
 

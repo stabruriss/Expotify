@@ -1,24 +1,70 @@
 use anyhow::{Context, Result};
-use std::process::Command;
+use std::{
+    process::{Command, Output, Stdio},
+    sync::{Mutex, OnceLock},
+    thread,
+    time::{Duration, Instant},
+};
 
 use super::types::TrackInfo;
 
+const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(5);
+const OSASCRIPT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+static OSASCRIPT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn osascript_lock() -> &'static Mutex<()> {
+    OSASCRIPT_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn run_command_with_timeout(mut command: Command, timeout: Duration) -> Result<Output> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn command")?;
+
+    let started = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .context("Failed to wait for command status")?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .context("Failed to collect command output");
+        }
+
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait_with_output();
+            anyhow::bail!("command timed out after {}ms", timeout.as_millis());
+        }
+
+        thread::sleep(OSASCRIPT_POLL_INTERVAL);
+    }
+}
+
+fn run_osascript(script: &str) -> Result<Output> {
+    let _guard = osascript_lock()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("osascript lock poisoned"))?;
+    let wrapped_script = format!(
+        "with timeout of {} seconds\n{}\nend timeout",
+        OSASCRIPT_TIMEOUT.as_secs(),
+        script
+    );
+    let mut command = Command::new("osascript");
+    command.arg("-e").arg(&wrapped_script);
+    run_command_with_timeout(command, OSASCRIPT_TIMEOUT).context("Failed to execute osascript")
+}
+
 /// Check if Spotify desktop app is currently running
 pub fn is_spotify_running() -> bool {
-    // Try AppleScript first (most reliable in release builds)
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(r#"tell application "System Events" to (name of processes) contains "Spotify""#)
-        .output();
-
-    match output {
-        Ok(out) if out.status.success() => {
-            return String::from_utf8_lossy(&out.stdout).trim() == "true";
-        }
-        _ => {}
-    }
-
-    // Fallback: pgrep (works in dev mode without AppleScript permissions)
+    // Avoid System Events in the hot polling path. Repeated AppleScript UI
+    // automation can trigger expensive macOS TCC/signing checks.
     Command::new("pgrep")
         .arg("-x")
         .arg("Spotify")
@@ -51,11 +97,7 @@ tell application "Spotify"
 end tell
 "#;
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .context("Failed to execute osascript")?;
+    let output = run_osascript(script)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -158,11 +200,7 @@ tell application frontApp to activate
         uri
     );
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to execute osascript")?;
+    let output = run_osascript(&script)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -192,11 +230,7 @@ end tell
 tell application frontApp to activate
 "#;
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .context("Failed to execute osascript")?;
+    let output = run_osascript(script)?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -212,11 +246,7 @@ pub fn get_spotify_volume() -> Result<u32> {
         anyhow::bail!("Spotify is not running");
     }
     let script = r#"tell application "Spotify" to sound volume"#;
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .context("Failed to execute osascript")?;
+    let output = run_osascript(script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("AppleScript error: {}", stderr);
@@ -238,11 +268,7 @@ pub fn set_spotify_volume(volume: u32) -> Result<()> {
         r#"tell application "Spotify" to set sound volume to {}"#,
         vol
     );
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to execute osascript")?;
+    let output = run_osascript(&script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("AppleScript error: {}", stderr);
@@ -255,11 +281,7 @@ fn run_spotify_command(cmd: &str) -> Result<()> {
         anyhow::bail!("Spotify is not running");
     }
     let script = format!(r#"tell application "Spotify" to {}"#, cmd);
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to execute osascript")?;
+    let output = run_osascript(&script)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("AppleScript error: {}", stderr);
