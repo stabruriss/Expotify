@@ -45,6 +45,23 @@ jobs:
             echo "${DELIMITER}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Verify release secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=0
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub secret: ${name}"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Import Apple certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -65,27 +82,103 @@ jobs:
           security list-keychain -d user -s $KEYCHAIN_PATH
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Nan Wu (FHG4VDYX2S)"
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run tauri -- build
+
+      - name: Sign bundled vendor binaries
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Nan Wu (FHG4VDYX2S)"
+        run: |
+          APP_BUNDLE="src-tauri/target/release/bundle/macos/Expotify.app"
+          VENDOR_DIR="$APP_BUNDLE/Contents/Resources/node_modules/@anthropic-ai/claude-agent-sdk/vendor"
+
+          if [ -d "$VENDOR_DIR" ]; then
+            while IFS= read -r -d '' file; do
+              if file "$file" | grep -q "Mach-O"; then
+                echo "Signing bundled executable: $file"
+                codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$file"
+                codesign --verify --strict --verbose=2 "$file"
+              fi
+            done < <(find "$VENDOR_DIR" -type f -print0)
+          fi
+
+          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          spctl --assess --type execute --verbose=4 "$APP_BUNDLE"
+
+      - name: Rebuild signed DMG
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Nan Wu (FHG4VDYX2S)"
+        run: |
+          DMG_DIR="src-tauri/target/release/bundle/dmg"
+          APP_DIR="src-tauri/target/release/bundle/macos"
+          DMG=$(find "$DMG_DIR" -maxdepth 1 -name "*.dmg" | head -1)
+          if [ -z "$DMG" ]; then
+            echo "::error::No DMG found after Tauri build"
+            exit 1
+          fi
+
+          rm -f "$DMG"
+          "$DMG_DIR/bundle_dmg.sh" \
+            --volname "Expotify" \
+            --volicon "$DMG_DIR/icon.icns" \
+            --window-size 660 400 \
+            --icon-size 100 \
+            --icon "Expotify.app" 180 170 \
+            --hide-extension "Expotify.app" \
+            --app-drop-link 480 170 \
+            --codesign "$APPLE_SIGNING_IDENTITY" \
+            "$DMG" \
+            "$APP_DIR"
+
+      - name: Notarize and staple DMG
+        env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: FHG4VDYX2S
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Expotify ${{ github.ref_name }}'
-          releaseBody: ${{ steps.release_notes.outputs.body }}
-          releaseDraft: false
-          prerelease: false
-
-      - name: Upload versioned DMG
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           VERSION="${{ github.ref_name }}"
           DMG=$(find src-tauri/target/release/bundle/dmg -name "*.dmg" | head -1)
-          if [ -n "$DMG" ]; then
-            cp "$DMG" "/tmp/Expotify_${VERSION}.dmg"
-            gh release upload ${{ github.ref_name }} "/tmp/Expotify_${VERSION}.dmg" --clobber
+          RELEASE_DMG="/tmp/Expotify_${VERSION}.dmg"
+
+          if [ -z "$DMG" ]; then
+            echo "::error::No DMG found to notarize"
+            exit 1
+          fi
+
+          cp "$DMG" "$RELEASE_DMG"
+          xcrun notarytool submit "$RELEASE_DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
+          xcrun stapler staple "$RELEASE_DMG"
+          xcrun stapler validate "$RELEASE_DMG"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$RELEASE_DMG"
+          shasum -a 256 "$RELEASE_DMG"
+
+      - name: Publish GitHub release
+        run: |
+          VERSION="${{ github.ref_name }}"
+          RELEASE_DMG="/tmp/Expotify_${VERSION}.dmg"
+
+          if [ ! -f "$RELEASE_DMG" ]; then
+            echo "::error::Missing notarized release DMG: $RELEASE_DMG"
+            exit 1
+          fi
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release edit "$VERSION" \
+              --title "Expotify $VERSION" \
+              --notes-file /tmp/release-notes.md
+            gh release upload "$VERSION" "$RELEASE_DMG" --clobber
+          else
+            gh release create "$VERSION" "$RELEASE_DMG" \
+              --title "Expotify $VERSION" \
+              --notes-file /tmp/release-notes.md \
+              --verify-tag
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
