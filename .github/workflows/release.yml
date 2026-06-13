@@ -106,7 +106,7 @@ jobs:
 
           codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$APP_BUNDLE"
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
-          spctl --assess --type execute --verbose=4 "$APP_BUNDLE"
+          # Gatekeeper assessment is deferred until after the DMG is notarized and stapled.
 
       - name: Rebuild signed DMG
         env:
