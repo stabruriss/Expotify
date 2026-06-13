@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { checkForUpdate, openUrl, type UpdateInfo } from "../lib/tauri";
 
 const CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const UPDATE_PAGE_URL = "https://www.expotify.live/";
 
 export function useUpdateCheck() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
@@ -29,7 +30,7 @@ export function useUpdateCheck() {
 
   const openRelease = useCallback(() => {
     if (updateInfo) {
-      openUrl(updateInfo.release_url);
+      openUrl(UPDATE_PAGE_URL);
     }
   }, [updateInfo]);
 
