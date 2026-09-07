@@ -1,49 +1,88 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command as StdCommand, Stdio};
+use serde::Deserialize;
+use serde_json::json;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+use std::time::Duration;
 
 use super::cache::TrackInfoCache;
+use super::models::{CatalogCache, ModelInfo, ModelProvider, ModelSelection, ProviderCatalog};
 use super::AgentResponse;
 use crate::auth::AnthropicAuth;
 use crate::spotify::TrackInfo;
 
 const TRACK_SYSTEM_PROMPT: &str = "You are a music expert with deep knowledge of musical styles, genres, creators, music theory, music and art history, as well as fascinating stories and trivia. You excel at making music accessible and engaging, effectively conveying knowledge while sparking the listener's curiosity.";
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaudeHelperRequest {
-    oauth_token: String,
-    model: String,
-    system_prompt: String,
-    prompt: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ClaudeHelperResponse {
-    text: String,
-    #[allow(dead_code)]
-    structured: Option<serde_json::Value>,
-}
-
 pub struct AnthropicService {
     auth: Arc<AnthropicAuth>,
-    helper_script_path: PathBuf,
     cache: TrackInfoCache,
+    catalog: CatalogCache,
 }
 
 impl AnthropicService {
-    pub fn new(auth: Arc<AnthropicAuth>, helper_script_path: PathBuf) -> Self {
+    pub fn new(auth: Arc<AnthropicAuth>) -> Self {
         Self {
             auth,
-            helper_script_path,
             cache: TrackInfoCache::default(),
+            catalog: CatalogCache::default(),
         }
+    }
+
+    pub async fn list_models(&self, force: bool) -> ProviderCatalog {
+        self.catalog
+            .get(ModelProvider::Anthropic, force, || async {
+                #[derive(Deserialize)]
+                struct Catalog {
+                    models: Vec<ModelInfo>,
+                    default_model: String,
+                    fetched_at: Option<chrono::DateTime<chrono::Utc>>,
+                    stale: bool,
+                    error: Option<String>,
+                }
+                let data = self
+                    .runtime_call(json!({"action":"catalog"}), Duration::from_secs(40))
+                    .await?;
+                let catalog: Catalog =
+                    serde_json::from_value(data).context("Invalid Claude model catalog")?;
+                if catalog.fetched_at.is_none() {
+                    anyhow::bail!(
+                        "Claude model list has not finished loading. Refresh the model list."
+                    );
+                }
+                let mut result = ProviderCatalog::new(
+                    ModelProvider::Anthropic,
+                    catalog.models,
+                    catalog.default_model,
+                )?;
+                result.fetched_at = catalog.fetched_at;
+                result.stale = catalog.stale;
+                result.error = catalog.error;
+                Ok(result)
+            })
+            .await
+    }
+
+    pub async fn resolve_model(&self, selection: &ModelSelection) -> Result<String> {
+        selection.validate()?;
+        match selection {
+            ModelSelection::Default { .. } => self.list_models(false).await.resolve_default(),
+            ModelSelection::Fixed { model, .. } => Ok(model.clone()),
+        }
+    }
+
+    async fn runtime_call(
+        &self,
+        request: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value> {
+        let result = self.auth.runtime.call(request, timeout).await;
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<crate::claude_runtime::ClaudeAuthenticationError>())
+        {
+            self.auth.invalidate().await;
+        }
+        result
     }
 
     pub async fn get_track_description(
@@ -55,24 +94,19 @@ impl AnthropicService {
         force: bool,
         memories: &[String],
     ) -> Result<(String, bool)> {
+        let cache_key = format!("{}:{model}", track.id);
         if force {
-            self.cache.remove(&track.id).await;
-        } else if let Some(cached) = self.cache.get(&track.id).await {
+            self.cache.remove(&cache_key).await;
+        } else if let Some(cached) = self.cache.get(&cache_key).await {
             return Ok((cached, false));
         }
-
         let prompt = prompt_template
             .replace("{name}", &track.name)
             .replace("{artist}", &track.artist)
             .replace("{album}", &track.album)
             .replace("{memories}", &format_memories(memories));
-
         let description = self.run_prompt(model, TRACK_SYSTEM_PROMPT, &prompt).await?;
-        if description.is_empty() {
-            anyhow::bail!("Empty response from Claude");
-        }
-
-        self.cache.set(track.id.clone(), description.clone()).await;
+        self.cache.set(cache_key, description.clone()).await;
         Ok((description, false))
     }
 
@@ -94,194 +128,33 @@ impl AnthropicService {
             .replace("{album}", album)
             .replace("{volume}", &volume.to_string())
             .replace("{memories}", &format_memories(memories));
-
-        let prompt = format_chat_history(messages);
-        let text = self.run_prompt(model, &system_prompt, &prompt).await?;
+        let text = self
+            .run_prompt(model, &system_prompt, &format_chat_history(messages))
+            .await?;
         Ok(super::parse_agent_response(&text))
     }
 
-    pub async fn probe_connection(&self) -> Result<()> {
-        let response = self
-            .run_prompt(
-                "claude-sonnet-4-6",
-                "You are a connection health check. Reply with exactly OK.",
-                "Reply with exactly OK.",
+    async fn run_prompt(&self, model: &str, system_prompt: &str, prompt: &str) -> Result<String> {
+        let data = self
+            .runtime_call(
+                json!({
+                    "action":"prompt", "model":model, "systemPrompt":system_prompt, "prompt":prompt,
+                }),
+                Duration::from_secs(180),
             )
             .await?;
-
-        if response.trim().is_empty() {
-            anyhow::bail!("Claude probe returned an empty response");
-        }
-
-        Ok(())
+        data["text"]
+            .as_str()
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned)
+            .context("Empty response from Claude")
     }
-
-    async fn run_prompt(&self, model: &str, system_prompt: &str, prompt: &str) -> Result<String> {
-        let oauth_token = self.auth.get_access_token().await?;
-        let request = ClaudeHelperRequest {
-            oauth_token,
-            model: model.to_string(),
-            system_prompt: system_prompt.to_string(),
-            prompt: prompt.to_string(),
-        };
-        let payload = serde_json::to_vec(&request)?;
-        let node_path = resolve_node_binary()?;
-
-        log::info!(
-            "Starting Claude helper with Node at {}",
-            node_path.display()
-        );
-        let mut child = Command::new(&node_path)
-            .arg(&self.helper_script_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "Failed to start Claude helper at {} with Node {}. Ensure Node.js 18+ is installed or set EXPOTIFY_NODE_PATH.",
-                    self.helper_script_path.display(),
-                    node_path.display()
-                )
-            })?;
-
-        let mut stdin = child
-            .stdin
-            .take()
-            .context("Claude helper stdin was not available")?;
-        stdin.write_all(&payload).await?;
-        drop(stdin);
-
-        let output = child.wait_with_output().await?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let detail = if !stderr.is_empty() { stderr } else { stdout };
-            anyhow::bail!(
-                "Claude helper failed{}",
-                if detail.is_empty() {
-                    String::new()
-                } else {
-                    format!(": {}", detail)
-                }
-            );
-        }
-
-        let response: ClaudeHelperResponse = serde_json::from_slice(&output.stdout)
-            .context("Failed to parse Claude helper output")?;
-        Ok(response.text)
-    }
-}
-
-fn resolve_node_binary() -> Result<PathBuf> {
-    if let Ok(explicit) = env::var("EXPOTIFY_NODE_PATH") {
-        let path = PathBuf::from(explicit);
-        match node_major_version(&path) {
-            Some(major) if major >= 18 => return Ok(path),
-            Some(major) => {
-                log::warn!(
-                    "Ignoring EXPOTIFY_NODE_PATH={} because it points to Node.js {}",
-                    path.display(),
-                    major
-                );
-            }
-            None => {
-                log::warn!(
-                    "Ignoring EXPOTIFY_NODE_PATH={} because it is not a usable Node.js binary",
-                    path.display()
-                );
-            }
-        }
-    }
-
-    if let Some(path) = find_in_path("node") {
-        return Ok(path);
-    }
-
-    for candidate in common_node_candidates() {
-        if is_usable_binary(&candidate) {
-            return Ok(candidate);
-        }
-    }
-
-    anyhow::bail!(
-        "Node.js 18+ executable not found. Install Node.js or set EXPOTIFY_NODE_PATH to the full node binary path."
-    );
-}
-
-fn find_in_path(binary_name: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-    env::split_paths(&path_var)
-        .map(|dir| dir.join(binary_name))
-        .find(|candidate| is_usable_binary(candidate))
-}
-
-fn common_node_candidates() -> Vec<PathBuf> {
-    let mut candidates = vec![
-        PathBuf::from("/opt/homebrew/bin/node"),
-        PathBuf::from("/usr/local/bin/node"),
-        PathBuf::from("/usr/bin/node"),
-        PathBuf::from("/opt/local/bin/node"),
-    ];
-
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".volta/bin/node"));
-        candidates.push(home.join(".asdf/shims/node"));
-        candidates.push(home.join(".fnm/current/bin/node"));
-        candidates.push(home.join(".local/share/mise/shims/node"));
-        candidates.push(home.join(".mise/shims/node"));
-        candidates.extend(find_nvm_nodes(&home));
-    }
-
-    candidates
-}
-
-fn find_nvm_nodes(home: &Path) -> Vec<PathBuf> {
-    let base = home.join(".nvm/versions/node");
-    let entries = match fs::read_dir(base) {
-        Ok(entries) => entries,
-        Err(_) => return Vec::new(),
-    };
-
-    let mut versions: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|item| item.path().join("bin/node")))
-        .filter(|candidate| is_usable_binary(candidate))
-        .collect();
-
-    versions.sort();
-    versions.reverse();
-    versions
-}
-
-fn is_usable_binary(path: &Path) -> bool {
-    matches!(node_major_version(path), Some(major) if major >= 18)
-}
-
-fn node_major_version(path: &Path) -> Option<u32> {
-    if !path.is_file() {
-        return None;
-    }
-
-    let output = StdCommand::new(path).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let version = String::from_utf8_lossy(&output.stdout);
-    parse_node_major_version(&version)
-}
-
-fn parse_node_major_version(version: &str) -> Option<u32> {
-    let trimmed = version.trim();
-    let raw = trimmed.strip_prefix('v').unwrap_or(trimmed);
-    raw.split('.').next()?.parse().ok()
 }
 
 fn format_memories(memories: &[String]) -> String {
     if memories.is_empty() {
         return String::new();
     }
-
     let items: Vec<String> = memories
         .iter()
         .enumerate()
@@ -294,22 +167,14 @@ fn format_chat_history(messages: &[super::ChatMessage]) -> String {
     if messages.is_empty() {
         return "User:".to_string();
     }
-
-    let mut transcript = String::from(
-        "Conversation so far:\n\nReply to the latest user message. If you decide to call a tool, return only the JSON object requested in the system prompt.\n\n",
-    );
-
+    let mut transcript = String::from("Conversation so far:\n\nReply to the latest user message. If you decide to call a tool, return only the JSON object requested in the system prompt.\n\n");
     for message in messages {
         let speaker = if message.role == "assistant" {
             "Assistant"
         } else {
             "User"
         };
-        transcript.push_str(speaker);
-        transcript.push_str(": ");
-        transcript.push_str(&message.content);
-        transcript.push_str("\n\n");
+        transcript.push_str(&format!("{speaker}: {}\n\n", message.content));
     }
-
     transcript
 }

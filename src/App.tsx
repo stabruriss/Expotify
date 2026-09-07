@@ -4,10 +4,13 @@ import { useAuth } from "./hooks/useAuth";
 import { useTrack } from "./hooks/useTrack";
 import { useLyrics } from "./hooks/useLyrics";
 import { LyricsDisplay } from "./components/LyricsDisplay";
-import { getSettings, updateSettings, listModels } from "./lib/tauri";
-import type { ModelInfo } from "./lib/tauri";
-import type { Settings } from "./types";
-import { FALLBACK_MODELS, DEFAULT_AI_PROMPT, DEFAULT_CHAT_PROMPT } from "./types";
+import { ModelPicker } from "./components/ModelPicker";
+import { useModelCatalog } from "./hooks/useModelCatalog";
+import { canSaveSelection } from "./lib/models";
+import { getSettings, updateSettings } from "./lib/tauri";
+import type { ModelSelection, Settings } from "./types";
+import { DEFAULT_MODEL, DEFAULT_AI_PROMPT, DEFAULT_CHAT_PROMPT } from "./types";
+import { RotateCcw, X } from "lucide-react";
 import { useIMEComposition } from "./hooks/useIMEComposition";
 import "./App.css";
 
@@ -22,7 +25,6 @@ function App() {
     loginOpenai,
     logoutOpenai,
     startAnthropicLogin,
-    completeAnthropicLogin,
     cancelAnthropicLogin,
     logoutAnthropic,
     loginSpotify,
@@ -31,7 +33,6 @@ function App() {
   } = useAuth();
   const [spDcInput, setSpDcInput] = useState("");
   const [spDcError, setSpDcError] = useState<string | null>(null);
-  const [anthropicCode, setAnthropicCode] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<Settings | null>(null);
   const {
@@ -48,57 +49,20 @@ function App() {
     trackId: null,
     text: null,
   });
-  const [draftModel, setDraftModel] = useState("");
+  const [draftModel, setDraftModel] = useState<ModelSelection>(DEFAULT_MODEL);
   const [draftPrompt, setDraftPrompt] = useState("");
   const [draftWebSearch, setDraftWebSearch] = useState(false);
-  const [draftChatModel, setDraftChatModel] = useState("");
+  const [draftChatModel, setDraftChatModel] = useState<ModelSelection>(DEFAULT_MODEL);
   const [draftChatPrompt, setDraftChatPrompt] = useState("");
   const [draftMemories, setDraftMemories] = useState<string[]>([]);
   const [newMemory, setNewMemory] = useState("");
   const [settingsTab, setSettingsTab] = useState<"insight" | "chat" | "memories">("insight");
   const [saving, setSaving] = useState(false);
-  const [dynamicModels, setDynamicModels] = useState<ModelInfo[]>([]);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const { catalogs, loading: modelsLoading, error: modelsError, refresh: refreshModels } = useModelCatalog(authStatus, showSettings);
 
   // AI is available if any provider is connected
   const aiConnected = authStatus.openai || authStatus.anthropic;
-
-  // Fetch available models dynamically from APIs
-  useEffect(() => {
-    if (!authStatus.openai && !authStatus.anthropic) return;
-    listModels()
-      .then((models) => { if (models.length > 0) setDynamicModels(models); })
-      .catch(() => {});
-  }, [authStatus.openai, authStatus.anthropic]);
-
-  // Use dynamic models if available, otherwise fall back to hardcoded
-  const availableModels = useMemo(() => {
-    if (dynamicModels.length > 0) {
-      return dynamicModels.filter((m) => {
-        if (m.provider === "openai") return authStatus.openai;
-        if (m.provider === "anthropic") return authStatus.anthropic;
-        return false;
-      });
-    }
-    return FALLBACK_MODELS.filter((m) => {
-      if (m.provider === "openai") return authStatus.openai;
-      if (m.provider === "anthropic") return authStatus.anthropic;
-      return false;
-    });
-  }, [dynamicModels, authStatus.openai, authStatus.anthropic]);
-
-  useEffect(() => {
-    if (availableModels.length === 0) return;
-    const availableIds = new Set(availableModels.map((m) => m.id));
-    const fallbackModel = availableModels[0]?.id ?? "";
-
-    if (draftModel && !availableIds.has(draftModel)) {
-      setDraftModel(fallbackModel);
-    }
-
-    if (draftChatModel && !availableIds.has(draftChatModel)) {
-      setDraftChatModel(fallbackModel);
-    }
-  }, [availableModels, draftModel, draftChatModel]);
 
   // Read AI insight from localStorage cache when track changes
   useEffect(() => {
@@ -155,12 +119,17 @@ function App() {
       localStorage.setItem("expotify_settings_tts_volume", String(s.tts_volume));
     } catch (e) {
       console.error("Failed to load settings", e);
+      setSettingsError(String(e));
     }
   }, [applySettingsToDrafts]);
 
   useEffect(() => {
     loadSettings(true);
   }, [loadSettings]);
+
+  useEffect(() => {
+    void loadSettings(false);
+  }, [authStatus.openai, authStatus.anthropic, loadSettings]);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -181,6 +150,7 @@ function App() {
   }, [loadSettings, showSettings]);
 
   const openSettings = async () => {
+    setSettingsError(null);
     try {
       await loadSettings(true);
     } catch {}
@@ -191,6 +161,12 @@ function App() {
 
   const saveSettings = async () => {
     if (!settings) return;
+    if (!canSaveSelection(draftModel, settings.ai_model, catalogs, authStatus)
+        || !canSaveSelection(draftChatModel, settings.chat_model, catalogs, authStatus)) {
+      setSettingsError("Selected model is unavailable. Refresh the model list or choose another model.");
+      return;
+    }
+    setSettingsError(null);
     setSaving(true);
     try {
       const updated = {
@@ -207,6 +183,7 @@ function App() {
       setShowSettings(false);
     } catch (e) {
       console.error("Failed to save settings", e);
+      setSettingsError(String(e));
     } finally {
       setSaving(false);
     }
@@ -376,10 +353,7 @@ function App() {
             {!authStatus.anthropic && !anthropicPending && (
               <button
                 className="btn-primary connect-btn"
-                onClick={async () => {
-                  await startAnthropicLogin();
-                  setAnthropicCode("");
-                }}
+                onClick={startAnthropicLogin}
                 disabled={authLoading}
               >
                 {authLoading ? "Opening login..." : "Connect Claude Max/Pro"}
@@ -429,36 +403,11 @@ function App() {
           )}
           {anthropicPending && !authStatus.anthropic && (
             <div className="sp-dc-help">
-              <p className="sp-dc-help-text">
-                Claude login opened in your browser. After approval, paste the authorization code shown on the callback page here.
-              </p>
+              <p className="sp-dc-help-text" role="status">Waiting for Claude sign-in...</p>
               <div className="sp-dc-input-row">
-                <input
-                  type="text"
-                  className="field-input"
-                  placeholder="Paste Claude authorization code"
-                  value={anthropicCode}
-                  onChange={(e) => setAnthropicCode(e.target.value)}
-                />
-                <button
-                  className="btn-primary sp-dc-connect-btn"
-                  disabled={!anthropicCode.trim() || authLoading}
-                  onClick={async () => {
-                    try {
-                      await completeAnthropicLogin(anthropicCode);
-                      setAnthropicCode("");
-                    } catch {}
-                  }}
-                >
-                  {authLoading ? "..." : "Connect"}
-                </button>
                 <button
                   className="logout-btn"
-                  onClick={async () => {
-                    await cancelAnthropicLogin();
-                    setAnthropicCode("");
-                  }}
-                  disabled={authLoading}
+                  onClick={cancelAnthropicLogin}
                 >
                   Cancel
                 </button>
@@ -490,11 +439,11 @@ function App() {
       {/* Settings Popup */}
       {showSettings && (
         <div className="popup-overlay" onClick={() => setShowSettings(false)}>
-          <div className="popup" onClick={(e) => e.stopPropagation()}>
+          <div className="popup" role="dialog" aria-modal="true" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
             <div className="popup-header">
               <h3>Settings</h3>
-              <button className="popup-close" onClick={() => setShowSettings(false)}>
-                &times;
+              <button className="popup-close model-icon-button" aria-label="Close settings" title="Close" onClick={() => setShowSettings(false)}>
+                <X size={18} />
               </button>
             </div>
 
@@ -507,18 +456,8 @@ function App() {
             <div className="popup-body">
               {settingsTab === "insight" && (
                 <>
-                  <label className="field-label">Model</label>
-                  <select
-                    className="field-select"
-                    value={draftModel}
-                    onChange={(e) => setDraftModel(e.target.value)}
-                  >
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
+                  <ModelPicker value={draftModel} onChange={setDraftModel} catalogs={catalogs} auth={authStatus}
+                    loading={modelsLoading} error={modelsError} onRefresh={() => void refreshModels()} />
 
                   <label className="field-toggle">
                     <input
@@ -531,7 +470,7 @@ function App() {
 
                   <div className="field-label-row">
                     <label className="field-label">Prompt</label>
-                    <button className="reset-btn" onClick={resetPrompt}>Reset</button>
+                    <button className="model-icon-button" aria-label="Reset insight prompt" title="Reset prompt" onClick={resetPrompt}><RotateCcw size={14} /></button>
                   </div>
                   <textarea
                     className="field-textarea"
@@ -547,22 +486,12 @@ function App() {
 
               {settingsTab === "chat" && (
                 <>
-                  <label className="field-label">Model</label>
-                  <select
-                    className="field-select"
-                    value={draftChatModel}
-                    onChange={(e) => setDraftChatModel(e.target.value)}
-                  >
-                    {availableModels.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
+                  <ModelPicker value={draftChatModel} onChange={setDraftChatModel} catalogs={catalogs} auth={authStatus}
+                    loading={modelsLoading} error={modelsError} onRefresh={() => void refreshModels()} />
 
                   <div className="field-label-row">
                     <label className="field-label">Chat Prompt</label>
-                    <button className="reset-btn" onClick={() => setDraftChatPrompt(DEFAULT_CHAT_PROMPT)}>Reset</button>
+                    <button className="model-icon-button" aria-label="Reset chat prompt" title="Reset prompt" onClick={() => setDraftChatPrompt(DEFAULT_CHAT_PROMPT)}><RotateCcw size={14} /></button>
                   </div>
                   <textarea
                     className="field-textarea"
@@ -628,11 +557,12 @@ function App() {
               )}
             </div>
 
+            {settingsError && <p className="settings-error" role="alert">{settingsError}</p>}
             <div className="popup-footer">
               <button className="btn-secondary" onClick={() => setShowSettings(false)}>
                 Cancel
               </button>
-              <button className="btn-primary" onClick={saveSettings} disabled={saving}>
+              <button className="btn-primary" onClick={saveSettings} disabled={saving || !settings}>
                 {saving ? "Saving..." : "Save"}
               </button>
             </div>

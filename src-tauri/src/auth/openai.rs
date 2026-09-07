@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::net::TcpListener;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
 use super::keychain::KeychainStorage;
@@ -47,6 +47,7 @@ pub struct OpenAIAuth {
     token: Arc<RwLock<Option<OpenAIToken>>>,
     pkce_verifier: Arc<RwLock<Option<String>>>,
     state: Arc<RwLock<Option<String>>>,
+    token_operation: Mutex<()>,
 }
 
 impl OpenAIAuth {
@@ -66,10 +67,14 @@ impl OpenAIAuth {
         };
 
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("HTTP client"),
             token: Arc::new(RwLock::new(initial_token)),
             pkce_verifier: Arc::new(RwLock::new(None)),
             state: Arc::new(RwLock::new(None)),
+            token_operation: Mutex::new(()),
         }
     }
 
@@ -149,6 +154,7 @@ impl OpenAIAuth {
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<()> {
+        let _operation = self.token_operation.lock().await;
         let verifier = self
             .pkce_verifier
             .read()
@@ -220,6 +226,9 @@ impl OpenAIAuth {
     }
 
     pub async fn get_access_token(&self) -> Result<String> {
+        // Model refresh and generation can arrive together; rotate a refresh
+        // token once and prevent an in-flight refresh from undoing sign-out.
+        let _operation = self.token_operation.lock().await;
         let token = self.token.read().await;
         if let Some(ref t) = *token {
             if !t.is_expired() {
@@ -245,6 +254,7 @@ impl OpenAIAuth {
     }
 
     pub async fn logout(&self) -> Result<()> {
+        let _operation = self.token_operation.lock().await;
         KeychainStorage::delete(KEYCHAIN_KEY)?;
         *self.token.write().await = None;
         Ok(())

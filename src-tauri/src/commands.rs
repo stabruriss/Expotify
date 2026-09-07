@@ -1,9 +1,9 @@
+use crate::ai::models::{ModelProvider, ModelSelection, ProviderCatalog};
 use crate::ai::{AgentResponse, AnthropicService, ChatMessage, OpenAIService};
 use crate::auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use crate::lyrics::{LyricsFetcher, LyricsInfo};
 use crate::spotify::{self, SearchResult, SpotifyDevice, SpotifyWebApi, TrackInfo};
 use crate::storage::Settings;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::RwLock;
@@ -55,7 +55,6 @@ pub struct AppState {
     pub openai_service: Arc<RwLock<Option<OpenAIService>>>,
     pub anthropic_auth: Arc<AnthropicAuth>,
     pub anthropic_service: Arc<RwLock<Option<AnthropicService>>>,
-    pub claude_helper_script: PathBuf,
     pub spotify_auth: Arc<SpotifyAuth>,
     pub spotify_webapi: Arc<RwLock<Option<SpotifyWebApi>>>,
     pub settings: Arc<RwLock<Settings>>,
@@ -63,82 +62,41 @@ pub struct AppState {
     pub lyrics_fetcher: LyricsFetcher,
 }
 
-fn model_provider(model: &str) -> &'static str {
-    if model.starts_with("claude-") {
-        "anthropic"
-    } else {
-        "openai"
-    }
-}
-
 async fn resolve_connected_model(
     state: &AppState,
-    preferred: &str,
-    alternate: &str,
+    selection: &ModelSelection,
 ) -> Result<String, String> {
-    let openai_available = state.openai_service.read().await.is_some();
-    let anthropic_available = state.anthropic_service.read().await.is_some();
-
-    let is_available = |model: &str| match model_provider(model) {
-        "anthropic" => anthropic_available,
-        _ => openai_available,
+    let disconnected = || {
+        format!(
+            "{} is not connected. Select a connected model in Settings.",
+            selection.provider().label()
+        )
     };
-
-    if !preferred.is_empty() && is_available(preferred) {
-        return Ok(preferred.to_string());
-    }
-
-    if !alternate.is_empty() && is_available(alternate) {
-        log::warn!(
-            "Preferred model '{}' unavailable, falling back to '{}'",
-            preferred,
-            alternate
-        );
-        return Ok(alternate.to_string());
-    }
-
-    if openai_available {
-        let fallback = if model_provider(alternate) == "openai" && !alternate.is_empty() {
-            alternate.to_string()
-        } else {
-            "gpt-5.2".to_string()
-        };
-        if fallback != preferred {
-            log::warn!(
-                "Preferred model '{}' unavailable, falling back to '{}'",
-                preferred,
-                fallback
-            );
+    match selection.provider() {
+        ModelProvider::Openai => state
+            .openai_service
+            .read()
+            .await
+            .as_ref()
+            .ok_or_else(disconnected)?
+            .resolve_model(selection)
+            .await
+            .map_err(|e| e.to_string()),
+        ModelProvider::Anthropic => {
+            if !state.anthropic_auth.is_authenticated().await {
+                return Err(disconnected());
+            }
+            state
+                .anthropic_service
+                .read()
+                .await
+                .as_ref()
+                .ok_or_else(disconnected)?
+                .resolve_model(selection)
+                .await
+                .map_err(|e| e.to_string())
         }
-        return Ok(fallback);
     }
-
-    if anthropic_available {
-        let fallback = if model_provider(alternate) == "anthropic" && !alternate.is_empty() {
-            alternate.to_string()
-        } else {
-            "claude-sonnet-4-6".to_string()
-        };
-        if fallback != preferred {
-            log::warn!(
-                "Preferred model '{}' unavailable, falling back to '{}'",
-                preferred,
-                fallback
-            );
-        }
-        return Ok(fallback);
-    }
-
-    let provider = if model_provider(preferred) == "anthropic" {
-        "Claude"
-    } else {
-        "ChatGPT"
-    };
-
-    Err(format!(
-        "Selected model '{}' requires {} to be connected. Update Settings to use a connected model.",
-        preferred, provider
-    ))
 }
 
 // ============ Spotify Status ============
@@ -179,6 +137,12 @@ pub async fn openai_login(state: State<'_, AppState>) -> Result<(), String> {
 
     // Initialize OpenAI service after authentication
     let openai_service = OpenAIService::new(Arc::clone(&state.openai_auth));
+    let mut settings = state.settings.write().await;
+    let mut updated = settings.clone();
+    updated.initialize_model_defaults(ModelProvider::Openai);
+    updated.save().map_err(|e| e.to_string())?;
+    *settings = updated;
+    drop(settings);
     *state.openai_service.write().await = Some(openai_service);
 
     Ok(())
@@ -225,26 +189,24 @@ pub async fn get_current_track_with_ai(
         return Ok(None);
     };
 
-    // Get AI description — route by model prefix
+    // Route only to the selected provider; never silently change providers.
     let settings = state.settings.read().await;
     let preferred_model = settings.ai_model.clone();
-    let alternate_model = settings.chat_model.clone();
     let prompt = settings.ai_prompt.clone();
     let web_search = settings.ai_web_search;
     let memories = settings.memories.clone();
     drop(settings);
 
-    let model =
-        match resolve_connected_model(state.inner(), &preferred_model, &alternate_model).await {
-            Ok(model) => model,
-            Err(error) => {
-                info.ai_error = Some(error);
-                *state.current_track.write().await = Some(info.clone());
-                return Ok(Some(info));
-            }
-        };
+    let model = match resolve_connected_model(state.inner(), &preferred_model).await {
+        Ok(model) => model,
+        Err(error) => {
+            info.ai_error = Some(error);
+            *state.current_track.write().await = Some(info.clone());
+            return Ok(Some(info));
+        }
+    };
 
-    let ai_result = if model.starts_with("claude-") {
+    let ai_result = if preferred_model.provider() == ModelProvider::Anthropic {
         let service = state.anthropic_service.read().await;
         if let Some(ref anthropic) = *service {
             Some(
@@ -366,12 +328,16 @@ pub async fn update_settings(
     state: State<'_, AppState>,
     mut settings: Settings,
 ) -> Result<(), String> {
+    settings.ai_model.validate().map_err(|e| e.to_string())?;
+    settings.chat_model.validate().map_err(|e| e.to_string())?;
     // Preserve anthropic_enabled — only Claude OAuth connect/disconnect should change it
-    let current = state.settings.read().await;
+    let mut current = state.settings.write().await;
     settings.anthropic_enabled = current.anthropic_enabled;
-    drop(current);
+    settings.model_defaults_initialized = current.model_defaults_initialized
+        || settings.ai_model != current.ai_model
+        || settings.chat_model != current.chat_model;
     settings.save().map_err(|e| e.to_string())?;
-    *state.settings.write().await = settings;
+    *current = settings;
     Ok(())
 }
 
@@ -389,8 +355,8 @@ pub struct AuthStatus {
 
 #[tauri::command]
 pub async fn get_auth_status(state: State<'_, AppState>) -> Result<AuthStatus, String> {
-    let authenticated = state.anthropic_auth.is_authenticated().await;
     let service_active = state.anthropic_service.read().await.is_some();
+    let authenticated = service_active && state.anthropic_auth.is_authenticated().await;
     Ok(AuthStatus {
         openai: state.openai_auth.is_authenticated().await,
         anthropic: authenticated && service_active,
@@ -403,48 +369,20 @@ pub async fn get_auth_status(state: State<'_, AppState>) -> Result<AuthStatus, S
 
 #[tauri::command]
 pub async fn anthropic_start_oauth(state: State<'_, AppState>) -> Result<(), String> {
-    let auth_url = state
-        .anthropic_auth
-        .get_auth_url()
-        .await
-        .map_err(|e| e.to_string())?;
-    open::that(&auth_url).map_err(|e| format!("Failed to open browser: {}", e))?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn anthropic_complete_oauth(
-    state: State<'_, AppState>,
-    code: String,
-) -> Result<(), String> {
     state
         .anthropic_auth
-        .exchange_code(&code)
+        .login()
         .await
         .map_err(|e| e.to_string())?;
-
-    let service = crate::ai::AnthropicService::new(
-        Arc::clone(&state.anthropic_auth),
-        state.claude_helper_script.clone(),
-    );
-
-    if let Err(error) = service.probe_connection().await {
-        let _ = state.anthropic_auth.logout().await;
-        *state.anthropic_service.write().await = None;
-        let mut settings = state.settings.write().await;
-        settings.anthropic_enabled = false;
-        let _ = settings.save();
-        return Err(format!(
-            "Claude browser auth succeeded, but the connection probe failed: {}",
-            error
-        ));
-    }
-
-    *state.anthropic_service.write().await = Some(service);
-
+    let service = AnthropicService::new(Arc::clone(&state.anthropic_auth));
     let mut settings = state.settings.write().await;
-    settings.anthropic_enabled = true;
-    settings.save().map_err(|e| e.to_string())?;
+    let mut updated = settings.clone();
+    updated.anthropic_enabled = true;
+    updated.initialize_model_defaults(ModelProvider::Anthropic);
+    updated.save().map_err(|e| e.to_string())?;
+    *settings = updated;
+    drop(settings);
+    *state.anthropic_service.write().await = Some(service);
     Ok(())
 }
 
@@ -796,18 +734,13 @@ pub async fn agent_chat(
     messages: Vec<ChatMessage>,
 ) -> Result<AgentChatResult, String> {
     let settings = state.settings.read().await;
-    let preferred_model = if settings.chat_model.is_empty() {
-        settings.ai_model.clone()
-    } else {
-        settings.chat_model.clone()
-    };
-    let alternate_model = settings.ai_model.clone();
+    let preferred_model = settings.chat_model.clone();
     let chat_prompt = settings.chat_prompt.clone();
     let web_search = settings.ai_web_search;
     let memories = settings.memories.clone();
     drop(settings);
 
-    let model = resolve_connected_model(state.inner(), &preferred_model, &alternate_model).await?;
+    let model = resolve_connected_model(state.inner(), &preferred_model).await?;
 
     // Get current track info for context
     let current = state.current_track.read().await;
@@ -828,8 +761,7 @@ pub async fn agent_chat(
         .map_err(|e| e.to_string())?
         .unwrap_or(50);
 
-    // Route by model prefix
-    let response = if model.starts_with("claude-") {
+    let response = if preferred_model.provider() == ModelProvider::Anthropic {
         let service = state.anthropic_service.read().await;
         let anthropic = service
             .as_ref()
@@ -1107,79 +1039,29 @@ pub async fn show_main_window(app: AppHandle) -> Result<(), String> {
 
 // ============ Model Listing ============
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub name: String,
-    pub provider: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct CodexModel {
-    slug: String,
-    display_name: String,
-    #[serde(default)]
-    visibility: String,
-    #[serde(default)]
-    priority: i32,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct CodexModelsResponse {
-    models: Vec<CodexModel>,
-}
-
 #[tauri::command]
-pub async fn list_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
-    let client = reqwest::Client::new();
-    let mut models: Vec<ModelInfo> = Vec::new();
-
-    if state.anthropic_auth.is_authenticated().await {
-        models.push(ModelInfo {
-            id: "claude-sonnet-4-6".to_string(),
-            name: "Claude Sonnet 4.6".to_string(),
-            provider: "anthropic".to_string(),
-            created_at: String::new(),
-        });
-        models.push(ModelInfo {
-            id: "claude-opus-4-6".to_string(),
-            name: "Claude Opus 4.6".to_string(),
-            provider: "anthropic".to_string(),
-            created_at: String::new(),
-        });
-    }
-
-    // Fetch OpenAI/Codex models from ChatGPT backend API
-    if let Ok(token) = state.openai_auth.get_access_token().await {
-        match client
-            .get("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0")
-            .bearer_auth(&token)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if let Ok(data) = resp.json::<CodexModelsResponse>().await {
-                    // Filter to visible models only, exclude -codex variants (coding-specific)
-                    let mut visible: Vec<_> = data
-                        .models
-                        .into_iter()
-                        .filter(|m| m.visibility == "list" && !m.slug.contains("-codex"))
-                        .collect();
-                    visible.sort_by(|a, b| a.priority.cmp(&b.priority));
-                    for m in visible {
-                        models.push(ModelInfo {
-                            id: m.slug,
-                            name: m.display_name,
-                            provider: "openai".to_string(),
-                            created_at: String::new(),
-                        });
-                    }
-                }
-            }
-            Err(e) => log::warn!("Failed to fetch Codex models: {}", e),
+pub async fn list_models(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+) -> Result<Vec<ProviderCatalog>, String> {
+    let force = force.unwrap_or(false);
+    let openai = async {
+        let service = state.openai_service.read().await;
+        match service.as_ref() {
+            Some(service) => Some(service.list_models(force).await),
+            None => None,
         }
-    }
-
-    Ok(models)
+    };
+    let anthropic = async {
+        let service = state.anthropic_service.read().await;
+        if service.is_none() || !state.anthropic_auth.is_authenticated().await {
+            return None;
+        }
+        match service.as_ref() {
+            Some(service) => Some(service.list_models(force).await),
+            None => None,
+        }
+    };
+    let (openai, anthropic) = tokio::join!(openai, anthropic);
+    Ok([openai, anthropic].into_iter().flatten().collect())
 }

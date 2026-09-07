@@ -418,7 +418,7 @@ body {
 
 .popup {
   background: #1e1e1e;
-  border-radius: 12px;
+  border-radius: 8px;
   width: 90%;
   max-width: 400px;
   max-height: 80vh;
@@ -485,7 +485,12 @@ body {
   padding: 16px 20px;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
 }
+
+.settings-error { color: #ffc6ba; font-size: 12px; padding: 8px 20px; overflow-wrap: anywhere; max-height: 76px; overflow-y: auto; }
+.popup-header, .popup-tabs, .popup-footer { flex-shrink: 0; }
+@media (max-height: 560px) { .popup { max-height: calc(100dvh - 24px); } }
 
 .memories-list {
   display: flex;

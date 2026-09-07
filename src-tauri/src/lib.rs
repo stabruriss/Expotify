@@ -1,5 +1,6 @@
 mod ai;
 mod auth;
+mod claude_runtime;
 mod commands;
 mod lyrics;
 mod spotify;
@@ -19,40 +20,20 @@ use tauri::Manager;
 use tauri::RunEvent;
 use tokio::sync::RwLock;
 
-fn claude_helper_script_path(app: &tauri::App) -> Result<PathBuf, String> {
-    if cfg!(debug_assertions) {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../scripts/claude-helper/runner.mjs");
-        if path.is_file() {
-            return Ok(path);
-        }
-
-        return Err(format!(
-            "Claude helper script not found at {}",
-            path.display()
-        ));
-    }
-
+fn claude_helper_path(app: &tauri::App) -> Result<PathBuf, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-    let candidates = [
-        resource_dir.join("claude-helper/runner.mjs"),
-        resource_dir.join("claudehelper/runner.mjs"),
-    ];
-
-    candidates
-        .iter()
-        .find(|path| path.is_file())
-        .cloned()
-        .ok_or_else(|| {
-            format!(
-                "Claude helper script not found. Checked: {}",
-                candidates
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })
+    let bundled = resource_dir.join("claude/expotify-claude-helper");
+    if bundled.is_file() {
+        return Ok(bundled);
+    }
+    if cfg!(debug_assertions) {
+        let staged = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../binaries/claude/expotify-claude-helper");
+        if staged.is_file() {
+            return Ok(staged);
+        }
+    }
+    Err("Bundled Claude runtime is missing. Rebuild or reinstall Expotify.".into())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -72,29 +53,25 @@ pub fn run() {
                 Arc::new(RwLock::new(None))
             };
 
-            let claude_helper_script = claude_helper_script_path(app)?;
-
-            // Claude auth: load stored OAuth token if present
-            let anthropic_auth = Arc::new(AnthropicAuth::new());
+            let claude_runtime = Arc::new(claude_runtime::ClaudeRuntime::new(
+                claude_helper_path(app)?,
+                app.path().app_data_dir()?.join("claude-runtime"),
+            )?);
+            let anthropic_auth = Arc::new(AnthropicAuth::new(claude_runtime));
 
             // Load settings early to check anthropic_enabled
-            let settings = Settings::load().unwrap_or_default();
+            let mut settings = Settings::load()?;
+            if openai_auth.has_stored_token() {
+                settings.initialize_model_defaults(ai::models::ModelProvider::Openai);
+            }
 
-            let anthropic_service =
-                if anthropic_auth.has_stored_token() && settings.anthropic_enabled {
-                    log::info!("[setup] Claude OAuth token detected and enabled, creating service");
-                    Arc::new(RwLock::new(Some(AnthropicService::new(
-                        Arc::clone(&anthropic_auth),
-                        claude_helper_script.clone(),
-                    ))))
-                } else {
-                    if anthropic_auth.has_stored_token() {
-                        log::info!("[setup] Claude OAuth token detected but not activated by user");
-                    } else {
-                        log::info!("[setup] Claude OAuth token not found");
-                    }
-                    Arc::new(RwLock::new(None))
-                };
+            let anthropic_service = if settings.anthropic_enabled {
+                Arc::new(RwLock::new(Some(AnthropicService::new(Arc::clone(
+                    &anthropic_auth,
+                )))))
+            } else {
+                Arc::new(RwLock::new(None))
+            };
 
             // Spotify auth: sp_dc cookie loaded from keychain
             let spotify_auth = Arc::new(SpotifyAuth::new());
@@ -111,7 +88,6 @@ pub fn run() {
                 openai_service,
                 anthropic_auth,
                 anthropic_service,
-                claude_helper_script,
                 spotify_auth,
                 spotify_webapi,
                 settings: Arc::new(RwLock::new(settings)),
@@ -120,6 +96,12 @@ pub fn run() {
             };
 
             app.manage(state);
+
+            #[cfg(debug_assertions)]
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_title("Expotify (Local Test)");
+                let _ = main.show();
+            }
 
             // Restore overlay geometry before showing the window
             if let Some(overlay) = app.get_webview_window("overlay") {
@@ -264,7 +246,6 @@ pub fn run() {
             commands::spotify_play_track,
             // Anthropic
             commands::anthropic_start_oauth,
-            commands::anthropic_complete_oauth,
             commands::anthropic_cancel_oauth,
             commands::anthropic_logout,
             // Agent Chat

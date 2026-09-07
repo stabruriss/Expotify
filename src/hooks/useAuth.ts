@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import type { AuthStatus } from "../types";
 import {
   anthropicCancelOAuth,
-  anthropicCompleteOAuth,
   anthropicLogout,
   anthropicStartOAuth,
   getAuthStatus,
@@ -108,35 +107,14 @@ export function useAuth() {
     try {
       setError(null);
       setLoading(true);
-      await anthropicStartOAuth();
       setAnthropicPending(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setAnthropicPending(false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const completeAnthropicLogin = useCallback(async (code: string) => {
-    const trimmed = code.trim();
-    if (!trimmed) {
-      const message = "Authorization code is required";
-      setError(message);
-      throw new Error(message);
-    }
-
-    try {
-      setError(null);
-      setLoading(true);
-      await anthropicCompleteOAuth(trimmed);
+      await anthropicStartOAuth();
       setAuthStatus((prev) => ({ ...prev, anthropic: true, anthropic_available: true }));
-      setAnthropicPending(false);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      throw err;
+      if (!message.includes("cancelled")) setError(message);
     } finally {
+      setAnthropicPending(false);
       setLoading(false);
     }
   }, []);
@@ -173,7 +151,6 @@ export function useAuth() {
     loginOpenai,
     logoutOpenai,
     startAnthropicLogin,
-    completeAnthropicLogin,
     cancelAnthropicLogin,
     logoutAnthropic,
     loginSpotify,

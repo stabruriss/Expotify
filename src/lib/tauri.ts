@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { TrackInfo, Settings, AuthStatus, LyricsInfo, SearchResult, SpotifyDevice, ChatMessage, AgentChatResult } from "../types";
+import type { TrackInfo, Settings, AuthStatus, LyricsInfo, SearchResult, SpotifyDevice, ChatMessage, AgentChatResult, ProviderCatalog } from "../types";
 
 // ============ Spotify Status ============
 
@@ -79,10 +79,6 @@ export async function getAuthStatus(): Promise<AuthStatus> {
 
 export async function anthropicStartOAuth(): Promise<void> {
   return invoke("anthropic_start_oauth");
-}
-
-export async function anthropicCompleteOAuth(code: string): Promise<void> {
-  return invoke("anthropic_complete_oauth", { code });
 }
 
 export async function anthropicCancelOAuth(): Promise<void> {
@@ -193,15 +189,8 @@ export async function spotifyPlayTrack(uri: string): Promise<void> {
 
 // ============ Models ============
 
-export interface ModelInfo {
-  id: string;
-  name: string;
-  provider: string;
-  created_at: string;
-}
-
-export async function listModels(): Promise<ModelInfo[]> {
-  return invoke("list_models");
+export async function listModels(force = false): Promise<ProviderCatalog[]> {
+  return invoke("list_models", { force });
 }
 
 // ============ Agent Chat ============

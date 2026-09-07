@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod cache;
+pub mod models;
 pub mod openai;
 
 use serde::{Deserialize, Serialize};

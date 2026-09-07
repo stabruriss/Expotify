@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "expotify"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1138,6 +1138,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "hmac",
+ "libc",
  "log",
  "msedge-tts",
  "objc2",

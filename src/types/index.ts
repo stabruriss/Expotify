@@ -16,7 +16,7 @@ export interface TrackInfo {
 export interface Settings {
   poll_interval_secs: number;
   show_ai_description: boolean;
-  ai_model: string;
+  ai_model: ModelSelection;
   ai_prompt: string;
   ai_web_search: boolean;
   ai_auto: boolean;
@@ -24,9 +24,10 @@ export interface Settings {
   window_position: [number, number] | null;
   window_opacity: number;
   tts_volume: number;
-  chat_model: string;
+  chat_model: ModelSelection;
   chat_prompt: string;
   anthropic_enabled: boolean;
+  model_defaults_initialized: boolean;
   memories: string[];
 }
 
@@ -55,13 +56,23 @@ export interface SpotifyDevice {
   volume_percent: number | null;
 }
 
-// Fallback models used when API model listing is unavailable
-export const FALLBACK_MODELS = [
-  { id: "gpt-5.4", name: "gpt-5.4", provider: "openai" },
-  { id: "gpt-5.2", name: "gpt-5.2", provider: "openai" },
-  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-  { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
-];
+export type ModelProvider = "openai" | "anthropic";
+export type ModelSelection =
+  | { provider: ModelProvider; mode: "default" }
+  | { provider: ModelProvider; mode: "fixed"; model: string };
+
+export interface ModelInfo { id: string; name: string }
+
+export interface ProviderCatalog {
+  provider: ModelProvider;
+  models: ModelInfo[];
+  default_model: string | null;
+  fetched_at: string | null;
+  stale: boolean;
+  error: string | null;
+}
+
+export const DEFAULT_MODEL: ModelSelection = { provider: "openai", mode: "default" };
 
 export const DEFAULT_AI_PROMPT = `Briefly introduce this song (under 500 words):
 

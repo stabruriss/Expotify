@@ -1,192 +1,180 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { createRequire } from "node:module";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
+import { bootstrapObserver, guardSdkMessage, isClaudeAccount, isolatedEnvironment, normalizeCatalog, queryOptions, redactError, requireClaudeAccount } from "./protocol.mjs";
 
-const require = createRequire(import.meta.url);
-const sdkEntry = require.resolve("@anthropic-ai/claude-agent-sdk");
-const sdkDir = path.dirname(sdkEntry);
-const cliPath = path.join(sdkDir, "cli.js");
+const cliPath = path.join(path.dirname(process.execPath), "claude");
 
-async function readStdin() {
+async function readRequest() {
   const chunks = [];
+  let size = 0;
   for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    size += chunk.length;
+    if (size > 4 * 1024 * 1024) throw new Error("Claude request is too large");
+    chunks.push(chunk);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function buildOptions(request) {
-  return {
-    model: request.model,
-    maxTurns: 1,
-    systemPrompt: request.systemPrompt,
-    tools: [],
-    allowedTools: [],
-    permissionMode: "dontAsk",
-    persistSession: false,
-    cwd: process.cwd(),
-    executable: process.execPath,
-    pathToClaudeCodeExecutable: cliPath,
-    env: {
-      ...process.env,
-      ANTHROPIC_API_KEY: "",
-      CLAUDE_CODE_OAUTH_TOKEN: request.oauthToken,
-      CLAUDE_AGENT_SDK_CLIENT_APP: "expotify/0.5.2",
+function runCli(args, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cliPath, args, { env, cwd: env.CLAUDE_CONFIG_DIR, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const capture = stream => data => {
+      if (stream === "stdout") stdout += data;
+      else stderr += data;
+      if (stdout.length + stderr.length > 2 * 1024 * 1024) {
+        child.kill("SIGKILL");
+        reject(new Error("Claude runtime output exceeded its limit"));
+      }
+    };
+    child.stdout.on("data", capture("stdout"));
+    child.stderr.on("data", capture("stderr"));
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, stdout, stderr }));
+  });
+}
+
+async function nativeAccount(env) {
+  const result = await runCli(["auth", "status", "--json"], env);
+  let data;
+  try { data = JSON.parse(result.stdout); }
+  catch { throw new Error("Could not read Claude sign-in status"); }
+  if (typeof data.loggedIn !== "boolean") throw new Error("Invalid Claude sign-in status");
+  return { loggedIn: data.loggedIn, authMethod: data.authMethod, apiProvider: data.apiProvider, subscriptionType: data.subscriptionType };
+}
+
+async function metadata(request, env, observer) {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  // Initialize the SDK without sending a generation request.
+  const session = query({
+    prompt: (async function* () { await waiting; })(),
+    options: { ...queryOptions(request, cliPath, env),
+      // Metadata only. Capture in memory; never write account diagnostics to disk.
+      ...(observer ? { debugFile: "/dev/stderr", stderr: chunk => observer.observe(chunk) } : {}),
     },
-  };
-}
-
-function summarizeAccountInfo(account) {
-  if (!account) return null;
-
-  const parts = [];
-  if (account.email) parts.push(`email=${account.email}`);
-  if (account.organization) parts.push(`org=${account.organization}`);
-  if (account.subscriptionType) parts.push(`subscription=${account.subscriptionType}`);
-  if (account.tokenSource) parts.push(`tokenSource=${account.tokenSource}`);
-  if (account.apiKeySource) parts.push(`apiKeySource=${account.apiKeySource}`);
-  return parts.join(", ");
-}
-
-function summarizeRateLimitInfo(info) {
-  if (!info) return null;
-
-  const parts = [];
-  if (info.status) parts.push(`status=${info.status}`);
-  if (info.rateLimitType) parts.push(`type=${info.rateLimitType}`);
-  if (typeof info.utilization === "number") parts.push(`utilization=${info.utilization}`);
-  if (info.overageStatus) parts.push(`overageStatus=${info.overageStatus}`);
-  if (info.overageDisabledReason) {
-    parts.push(`overageDisabledReason=${info.overageDisabledReason}`);
-  }
-  if (info.isUsingOverage !== undefined) parts.push(`isUsingOverage=${info.isUsingOverage}`);
-  if (info.resetsAt) parts.push(`resetsAt=${info.resetsAt}`);
-  if (info.overageResetsAt) parts.push(`overageResetsAt=${info.overageResetsAt}`);
-  return parts.join(", ");
-}
-
-function summarizeAuthStatusMessage(msg) {
-  const parts = [`isAuthenticating=${msg.isAuthenticating}`];
-  if (Array.isArray(msg.output) && msg.output.length > 0) {
-    parts.push(`output=${msg.output.join(" / ")}`);
-  }
-  if (msg.error) {
-    parts.push(`error=${msg.error}`);
-  }
-  return parts.join(", ");
-}
-
-function formatDiagnosticError(error, diagnostics) {
-  const parts = [error instanceof Error ? error.message : String(error)];
-
-  const account = summarizeAccountInfo(diagnostics.account);
-  if (account) parts.push(`account=${account}`);
-  if (diagnostics.accountError) parts.push(`accountError=${diagnostics.accountError}`);
-  if (diagnostics.assistantErrors.length > 0) {
-    parts.push(`assistantErrors=${diagnostics.assistantErrors.join(",")}`);
-  }
-  if (diagnostics.resultErrors.length > 0) {
-    parts.push(`resultErrors=${diagnostics.resultErrors.join(" ; ")}`);
-  }
-  const rateLimit = summarizeRateLimitInfo(diagnostics.rateLimitInfo);
-  if (rateLimit) parts.push(`rateLimit=${rateLimit}`);
-  if (diagnostics.authStatusMessages.length > 0) {
-    parts.push(`authStatus=${diagnostics.authStatusMessages.join(" || ")}`);
-  }
-  if (diagnostics.messageFlow.length > 0) {
-    parts.push(`messageFlow=${diagnostics.messageFlow.join(",")}`);
-  }
-
-  return parts.join(" | ");
-}
-
-async function runPrompt(request) {
-  if (!request?.oauthToken) {
-    throw new Error("Claude OAuth token is missing");
-  }
-  if (!request?.model) {
-    throw new Error("Claude model is missing");
-  }
-
-  const options = buildOptions(request);
-  const session = query({ prompt: request.prompt, options });
-  let text = "";
-  let structured = undefined;
-  const diagnostics = {
-    account: null,
-    accountError: null,
-    assistantErrors: [],
-    resultErrors: [],
-    rateLimitInfo: null,
-    authStatusMessages: [],
-    messageFlow: [],
-  };
-
+  });
+  const close = () => { release(); session.close(); };
   try {
-    try {
-      diagnostics.account = await session.accountInfo();
-    } catch (error) {
-      diagnostics.accountError = error instanceof Error ? error.message : String(error);
+    const rows = await session.supportedModels();
+    return { rows, close };
+  } catch (error) { close(); throw error; }
+}
+
+async function catalog(request, env) {
+  const account = await nativeAccount(env);
+  requireClaudeAccount(account);
+  const started = Date.now();
+  let answeredAt = 0;
+  const observer = bootstrapObserver();
+  const warmup = await metadata(request, env, observer);
+  try {
+    // The pinned CLI refreshes its bootstrap cache after initialization. Its
+    // model list is a startup snapshot, so read it in a second process.
+    while (Date.now() - started < 6500) {
+      try {
+        const config = JSON.parse(await readFile(path.join(request.configDir, ".claude.json"), "utf8"));
+        const answered = config.additionalModelOptionsAnsweredAt;
+        const timestamp = typeof answered === "number" ? answered : Date.parse(answered);
+        if (Number.isFinite(timestamp)) answeredAt = timestamp;
+        if (observer.isFresh(answeredAt, started)) break;
+      } catch { /* A new account may not have a bootstrap cache yet. */ }
+      await delay(150);
     }
-
-    for await (const msg of session) {
-      diagnostics.messageFlow.push(
-        msg.type === "result" ? `result:${msg.subtype}` : msg.type
-      );
-
-      if (msg.type === "assistant") {
-        if (msg.error) {
-          diagnostics.assistantErrors.push(msg.error);
-          throw new Error(`Claude assistant error: ${msg.error}`);
-        }
-        for (const block of msg.message.content) {
-          if (block.type === "text") {
-            text += block.text;
-          }
-        }
-        continue;
-      }
-
-      if (msg.type === "auth_status") {
-        diagnostics.authStatusMessages.push(summarizeAuthStatusMessage(msg));
-        continue;
-      }
-
-      if (msg.type === "rate_limit_event") {
-        diagnostics.rateLimitInfo = msg.rate_limit_info;
-        continue;
-      }
-
-      if (msg.type === "result") {
-        if (msg.subtype !== "success") {
-          diagnostics.resultErrors.push(...(msg.errors ?? []));
-          throw new Error(msg.errors?.join("; ") || "Claude query failed");
-        }
-        structured = msg.structured_output;
-      }
-    }
-  } catch (error) {
-    throw new Error(formatDiagnosticError(error, diagnostics));
-  } finally {
-    session.close();
+  } finally { warmup.close(); }
+  const snapshot = await metadata(request, env);
+  try {
+    const fresh = observer.isFresh(answeredAt, started);
+    return { ...normalizeCatalog(snapshot.rows, account),
+      fetched_at: answeredAt ? new Date(fresh ? Date.now() : answeredAt).toISOString() : null,
+      stale: !fresh,
+      error: !fresh ? "Claude bootstrap refresh did not complete; using the runtime's cached catalog" : null,
+    };
   }
+  finally { snapshot.close(); }
+}
 
-  return {
-    text: text.trim(),
-    structured: structured ?? null,
+async function sdkProbe() {
+  // Packaging check only: never initialize against a caller's home or account.
+  const configDir = await mkdtemp(path.join(os.tmpdir(), "expotify-claude-probe-"));
+  const env = {
+    ...isolatedEnvironment(configDir, { HOME: configDir }),
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   };
+  try {
+    await mkdir(path.join(configDir, "workspace"), { mode: 0o700 });
+    if ((await nativeAccount(env)).loggedIn) throw new Error("SDK probe requires an isolated signed-out account");
+    const snapshot = await metadata({ configDir }, env);
+    try {
+      if (!Array.isArray(snapshot.rows) || snapshot.rows.length === 0) {
+        throw new Error("SDK initialization did not return model metadata");
+      }
+      return { sdkInitialized: true };
+    } finally { snapshot.close(); }
+  } finally { await rm(configDir, { recursive: true, force: true }); }
+}
+
+async function runPrompt(request, env) {
+  if (typeof request.prompt !== "string" || !request.prompt.trim()) throw new Error("Claude prompt is missing");
+  // Do not allow the runtime to fall through to a global Console/API-key profile.
+  requireClaudeAccount(await nativeAccount(env));
+  const session = query({ prompt: request.prompt, options: queryOptions(request, cliPath, env) });
+  let text = "";
+  let completed = false;
+  try {
+    for await (const message of session) {
+      guardSdkMessage(message);
+      if (message.type === "assistant") {
+        if (message.error) throw new Error(`Claude: ${message.error}`);
+        for (const block of message.message.content) {
+          if (block.type === "text") text += block.text;
+        }
+      }
+      if (message.type === "result") {
+        if (message.subtype !== "success" || message.is_error) {
+          throw new Error(message.errors?.join("; ") || "Claude request failed");
+        }
+        completed = true;
+        if (typeof message.result === "string") text = message.result;
+      }
+    }
+  } finally { session.close(); }
+  if (!completed || !text.trim()) throw new Error("Claude returned an incomplete or empty response");
+  return { text: text.trim() };
 }
 
 async function main() {
-  const raw = await readStdin();
-  const request = JSON.parse(raw);
-  const response = await runPrompt(request);
-  process.stdout.write(`${JSON.stringify(response)}\n`);
+  const request = await readRequest();
+  if (request.action === "probe") return sdkProbe();
+  const env = isolatedEnvironment(request.configDir);
+  await mkdir(path.join(request.configDir, "workspace"), { recursive: true, mode: 0o700 });
+  switch (request.action) {
+    case "status": return { loggedIn: isClaudeAccount(await nativeAccount(env)) };
+    case "login": {
+      const result = await runCli(["auth", "login", "--claudeai"], env);
+      if (result.code !== 0) throw new Error("Claude sign-in was not completed. Please reconnect.");
+      requireClaudeAccount(await nativeAccount(env));
+      return { loggedIn: true };
+    }
+    case "logout": {
+      const result = await runCli(["auth", "logout"], env);
+      if (result.code !== 0) throw new Error("Claude sign-out failed");
+      return { loggedIn: false };
+    }
+    case "catalog": return catalog(request, env);
+    case "prompt": return runPrompt(request, env);
+    default: throw new Error("Unknown Claude runtime action");
+  }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
+main().then(data => {
+  process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
+}).catch(error => {
+  process.stdout.write(`${JSON.stringify({ ok: false, error: redactError(error), code: error?.code || "request_failed" })}\n`);
   process.exitCode = 1;
 });

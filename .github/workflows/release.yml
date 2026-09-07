@@ -20,9 +20,26 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Setup Bun (build-time only)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Verify release inputs and tests
+        run: |
+          test "$(uname -m)" = "arm64"
+          node scripts/verify-release.mjs "$GITHUB_REF_NAME"
+          npm test
+          npm run build:claude
+          npm run build
+          cargo fmt --check --manifest-path src-tauri/Cargo.toml
+          cargo test --locked --lib --manifest-path src-tauri/Cargo.toml
 
       - name: Prepare release notes
         id: release_notes
@@ -92,20 +109,21 @@ jobs:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Nan Wu (FHG4VDYX2S)"
         run: |
           APP_BUNDLE="src-tauri/target/release/bundle/macos/Expotify.app"
-          VENDOR_DIR="$APP_BUNDLE/Contents/Resources/node_modules/@anthropic-ai/claude-agent-sdk/vendor"
-
-          if [ -d "$VENDOR_DIR" ]; then
-            while IFS= read -r -d '' file; do
-              if file "$file" | grep -q "Mach-O"; then
-                echo "Signing bundled executable: $file"
-                codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$file"
-                codesign --verify --strict --verbose=2 "$file"
-              fi
-            done < <(find "$VENDOR_DIR" -type f -print0)
-          fi
+          RUNTIME_DIR="$APP_BUNDLE/Contents/Resources/claude"
+          test "$(lipo -archs "$APP_BUNDLE/Contents/MacOS/expotify")" = "arm64"
+          for name in expotify-claude-helper claude; do
+            executable="$RUNTIME_DIR/$name"
+            test -x "$executable"
+            test "$(lipo -archs "$executable")" = "arm64"
+            codesign --force --timestamp --options runtime \
+              --entitlements scripts/claude-helper/entitlements.plist \
+              --sign "$APPLE_SIGNING_IDENTITY" "$executable"
+            codesign --verify --strict --verbose=2 "$executable"
+          done
 
           codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$APP_BUNDLE"
           codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+          node scripts/claude-helper/smoke.mjs "$RUNTIME_DIR/expotify-claude-helper"
           # Gatekeeper assessment is deferred until after the DMG is notarized and stapled.
 
       - name: Rebuild signed DMG

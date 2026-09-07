@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Expotify - Model Picker Preview</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      color: #f3f4f3;
+      background: #121212;
+      --panel: #1e1e1e;
+      --field: #282828;
+      --line: #383a39;
+      --muted: #aaaead;
+      --green: #64d5a2;
+      --warning: #f1c374;
+    }
+    * { box-sizing: border-box; letter-spacing: 0; }
+    body { margin: 0; min-width: 280px; }
+    button, input, select, textarea { font: inherit; }
+    button, select { cursor: pointer; }
+    button { color: inherit; }
+    button:disabled { cursor: not-allowed; }
+    button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+      outline: 2px solid var(--green); outline-offset: 3px;
+    }
+    [hidden] { display: none !important; }
+    .preview-bar {
+      min-height: 64px; padding: 12px 24px; border-bottom: 1px solid #292b2a;
+      display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between;
+    }
+    .identity { display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+    .identity strong { font-size: 18px; font-weight: 650; color: #1db954; }
+    .preview-label { font-size: 11px; color: #a0a5a2; border-left: 1px solid #414541; padding-left: 12px; }
+    .preview-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .preview-controls select {
+      max-width: 190px; min-width: 0; height: 30px; padding: 0 24px 0 9px;
+      border: 1px solid #404441; border-radius: 4px; background: #202321; color: #d5d9d6; font-size: 11px;
+    }
+    .stage { min-height: calc(100dvh - 65px); display: grid; place-items: center; padding: 28px 16px; }
+    .settings {
+      width: min(400px, 100%); height: min(534px, calc(100dvh - 122px)); min-height: 265px;
+      display: flex; flex-direction: column; position: relative;
+      background: var(--panel); border: 1px solid #3c3e3d; border-radius: 8px;
+      box-shadow: 0 18px 50px #0006;
+    }
+    .settings-header { height: 58px; flex: 0 0 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; }
+    h1 { margin: 0; font-size: 16px; font-weight: 600; }
+    .icon-button {
+      width: 30px; height: 30px; padding: 6px; border: 0; border-radius: 4px;
+      display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+      background: transparent; color: var(--muted);
+    }
+    .icon-button:hover { background: #ffffff0c; }
+    .icon { width: 16px; height: 16px; flex: 0 0 16px; display: block; object-fit: contain; }
+    .utility { filter: invert(85%); }
+    .brand { width: 19px; height: 19px; flex-basis: 19px; }
+    .brand.openai { filter: invert(93%); }
+    .tabs { display: flex; padding: 0 20px; border-bottom: 1px solid #343635; flex: 0 0 42px; }
+    .tab { height: 42px; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #afb3b0; font-size: 12px; }
+    .tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); }
+    .tab:hover { color: #fff; }
+    .settings-body { padding: 19px 20px; overflow: auto; min-height: 0; flex: 1; }
+    .label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .field-label { font-size: 12px; color: #c2c5c3; }
+    .account-count { color: #969c98; font-size: 10px; display: inline-flex; align-items: center; gap: 5px; }
+    .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+    .model-trigger {
+      width: 100%; min-height: 60px; padding: 10px 11px; border: 1px solid #4c514e; border-radius: 6px;
+      background: #282b29; display: flex; align-items: center; gap: 10px; text-align: left;
+    }
+    .model-trigger:hover { border-color: #777e79; }
+    .model-trigger[aria-expanded="true"] { border-color: var(--green); box-shadow: 0 0 0 1px #64d5a21a; }
+    .model-trigger.invalid { border-color: #b68c4e; }
+    .model-trigger:disabled { opacity: .6; }
+    .model-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .model-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex-wrap: wrap; }
+    .provider-tag { font-size: 10px; color: #aeb5b0; font-weight: 400; flex-shrink: 0; }
+    .model-name { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+    .model-detail { font-size: 11px; color: #a8b1aa; overflow-wrap: anywhere; line-height: 1.35; }
+    .invalid .model-detail, .warning-text { color: var(--warning); }
+    .model-trigger > .chevron { width: 14px; height: 14px; flex-basis: 14px; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; font-size: 12px; color: #c6cac7; }
+    .toggle { appearance: none; margin: 0; width: 30px; height: 18px; background: #4a504b; border: 1px solid #657168; border-radius: 20px; position: relative; cursor: pointer; }
+    .toggle:before { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #e4eae6; transition: transform .14s; }
+    .toggle:checked { background: #23825a; border-color: #4fbf8a; }
+    .toggle:checked:before { transform: translateX(12px); }
+    .prompt-heading { margin-top: 22px; margin-bottom: 6px; }
+    .prompt-heading .icon-button { width: 24px; height: 24px; padding: 5px; }
+    textarea {
+      display: block; width: 100%; height: 165px; min-height: 100px; resize: vertical;
+      padding: 11px; background: var(--field); border: 1px solid #424643; border-radius: 6px;
+      color: #d4d8d5; font-size: 12px; line-height: 1.75;
+    }
+    .settings-footer { min-height: 60px; flex-shrink: 0; padding: 12px 20px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; border-top: 1px solid #343635; }
+    .save-status { margin-right: auto; color: var(--green); font-size: 11px; }
+    .button { min-height: 32px; padding: 6px 15px; border-radius: 5px; border: 1px solid #515752; background: transparent; font-size: 12px; display: inline-flex; gap: 7px; align-items: center; justify-content: center; }
+    .button:hover { background: #ffffff08; }
+    .button.primary { background: #27825c; border-color: #50af80; color: #fff; }
+    .button.primary:hover { background: #309667; }
+    .button:disabled { opacity: .4; }
+    .popover {
+      position: fixed; z-index: 10; display: flex; flex-direction: column; overflow: hidden; max-width: calc(100vw - 20px);
+      background: #232624; border: 1px solid #58635b; border-radius: 6px;
+      box-shadow: 0 14px 40px #0009, 0 2px 8px #0004;
+    }
+    .popover.compact { max-width: calc(100vw - 28px); }
+    .popover-header { display: none; }
+    .popover.compact .popover-header { display: flex; align-items: center; justify-content: space-between; min-height: 40px; flex-shrink: 0; padding: 4px 9px 4px 14px; border-bottom: 1px solid #414b44; font-size: 12px; font-weight: 500; }
+    .model-list { padding: 5px; overflow: auto; min-height: 0; flex: 1; outline: none; scrollbar-width: thin; scrollbar-color: #626b65 #232624; overscroll-behavior: contain; }
+    .group-heading { margin: 0; padding: 9px 9px 6px; color: #a5b0a8; font-size: 10px; font-weight: 500; }
+    .group + .group { margin-top: 5px; padding-top: 5px; border-top: 1px solid #3b413d; }
+    .option {
+      width: 100%; border: 1px solid transparent; border-radius: 4px; background: transparent;
+      min-height: 40px; display: flex; align-items: center; gap: 9px; text-align: left; padding: 8px;
+    }
+    .option.default-option { min-height: 57px; }
+    .option .brand { width: 17px; height: 17px; flex-basis: 17px; }
+    .option .model-name { font-size: 12px; }
+    .option .provider-tag { font-size: 10px; }
+    .option .model-detail { font-size: 10px; }
+    .option[data-active="true"] { background: #363d38; border-color: #69766d; }
+    .option[aria-selected="true"] { background: #293e32; }
+    .option[aria-selected="true"][data-active="true"] { border-color: #5d9e75; }
+    .option:disabled { opacity: .5; }
+    .option .check { width: 15px; height: 15px; flex-basis: 15px; margin-left: auto; }
+    .option .check:not(.selected) { visibility: hidden; }
+    .popover-footer { border-top: 1px solid #414b44; flex-shrink: 0; display: flex; align-items: center; gap: 6px; justify-content: space-between; min-height: 37px; padding: 3px 9px 3px 12px; }
+    .catalog-status { min-width: 0; font-size: 10px; color: #a9b3ac; display: flex; align-items: center; gap: 6px; line-height: 1.4; }
+    .catalog-status .icon { width: 12px; height: 12px; flex-basis: 12px; }
+    .popover-footer .icon-button { width: 27px; height: 27px; padding: 6px; }
+    .spin { animation: spin 1.1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty { text-align: center; padding: 20px 8px; font-size: 12px; color: #b6beb8; line-height: 1.6; }
+    .connect-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+    .connect-actions .button { flex: 1; min-width: 120px; padding: 7px 10px; }
+    .memory-row { display: flex; gap: 8px; margin-top: 14px; }
+    .memory-row input { min-width: 0; flex: 1; padding: 9px; background: var(--field); border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
+    .memory-list { list-style: none; padding: 0; margin: 0; }
+    .memory-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .memory-list li span { overflow-wrap: anywhere; }
+    .reopen { display: flex; align-items: center; gap: 8px; }
+    @media (max-width: 620px) {
+      .preview-bar { padding: 10px 14px; gap: 10px; }
+      .identity { flex-basis: 100%; }
+      .preview-controls { flex-wrap: nowrap; width: 100%; }
+      .preview-controls select { flex: 1; max-width: none; width: 0; }
+      .stage { min-height: calc(100dvh - 100px); padding: 16px; }
+      .settings { height: min(534px, calc(100dvh - 135px)); }
+      .settings-header { height: 49px; flex-basis: 49px; }
+      .settings-header, .settings-body, .settings-footer { padding-left: 15px; padding-right: 15px; }
+      .tabs { padding: 0 15px; }
+      .settings-body { padding-top: 15px; }
+      .tab { padding: 0 11px; }
+      .model-title { column-gap: 6px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *:before { animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <header class="preview-bar">
+    <div class="identity"><strong>Expotify</strong><span class="preview-label">Model picker / UI preview</span></div>
+    <div class="preview-controls">
+      <select id="scenario" aria-label="Preview account and catalog state">
+        <option value="both">Both accounts</option>
+        <option value="openai">ChatGPT only</option>
+        <option value="claude">Claude only</option>
+        <option value="none">No accounts</option>
+        <option value="loading">Refreshing (saved list)</option>
+        <option value="error">Refresh failed (saved list)</option>
+        <option value="cold">First load</option>
+        <option value="cold-error">First load failed</option>
+        <option value="unavailable">Selected model unavailable</option>
+      </select>
+      <select id="snapshot" aria-label="Simulated provider default values">
+        <option value="0">Defaults: snapshot A</option>
+        <option value="1">Defaults: snapshot B (simulated)</option>
+      </select>
+    </div>
+  </header>
+  <main class="stage">
+    <section id="settings" class="settings" role="dialog" aria-labelledby="settings-title">
+      <header class="settings-header">
+        <h1 id="settings-title">Settings</h1>
+        <button id="close-settings" class="icon-button" aria-label="Close settings" title="Close settings"><img data-icon="close" class="icon utility" alt=""></button>
+      </header>
+      <nav class="tabs" role="tablist" aria-label="Settings sections">
+        <button id="tab-insight" class="tab" role="tab" aria-selected="false" aria-controls="model-panel" tabindex="-1" data-tab="insight">AI Insight</button>
+        <button id="tab-chat" class="tab" role="tab" aria-selected="true" aria-controls="model-panel" data-tab="chat">Chat</button>
+        <button id="tab-memories" class="tab" role="tab" aria-selected="false" aria-controls="memories-panel" tabindex="-1" data-tab="memories">Memories</button>
+      </nav>
+      <div class="settings-body">
+        <section id="model-panel" role="tabpanel" aria-labelledby="tab-chat">
+          <div class="label-row"><label id="model-label" class="field-label">Model</label><span id="account-count" class="account-count"></span></div>
+          <button id="model-trigger" class="model-trigger" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-list"></button>
+          <div id="connection-empty" class="empty" hidden>
+            No AI accounts connected
+            <div class="connect-actions">
+              <button class="button" data-connect="openai"><img data-icon="openai" class="icon brand openai" alt="">Connect ChatGPT</button>
+              <button class="button" data-connect="claude"><img data-icon="claude" class="icon brand" alt="">Connect Claude</button>
+            </div>
+          </div>
+          <label id="web-search-row" class="toggle-row" hidden><span>Web Search</span><input id="web-search" class="toggle" type="checkbox" checked></label>
+          <div class="label-row prompt-heading">
+            <label id="prompt-label" class="field-label" for="prompt">Chat Prompt</label>
+            <button id="reset-prompt" class="icon-button" aria-label="Reset prompt" title="Reset prompt"><img data-icon="reset" class="icon utility" alt=""></button>
+          </div>
+          <textarea id="prompt" spellcheck="false" aria-labelledby="prompt-label"></textarea>
+        </section>
+        <section id="memories-panel" role="tabpanel" aria-labelledby="tab-memories" hidden>
+          <div id="memories-empty" class="empty">No memories yet</div>
+          <ul id="memory-list" class="memory-list"></ul>
+          <form id="memory-form" class="memory-row"><input id="new-memory" aria-label="New memory" placeholder="Add a memory..."><button class="button" type="submit">Add</button></form>
+        </section>
+      </div>
+      <footer class="settings-footer"><span id="save-status" class="save-status" role="status" aria-live="polite"></span><button id="cancel" class="button">Cancel</button><button id="save" class="button primary">Save</button></footer>
+    </section>
+    <button id="reopen" class="button reopen" hidden><img data-icon="settings" class="icon utility" alt="">Settings</button>
+  </main>
+  <div id="popover" class="popover" hidden>
+    <div class="popover-header"><span>Model</span><button id="close-picker" class="icon-button" aria-label="Close model picker" title="Close model picker"><img data-icon="close" class="icon utility" alt=""></button></div>
+    <div id="model-list" class="model-list" role="listbox" aria-label="Available models" tabindex="0"></div>
+    <div class="popover-footer"><span id="catalog-status" class="catalog-status" role="status" aria-live="polite"></span><button id="refresh" class="icon-button" aria-label="Refresh model list" title="Refresh model list"><img data-icon="refresh" class="icon utility" alt=""></button></div>
+  </div>
+  <script>
+    // Static preview only: no API, credentials, localStorage, or application IPC.
+    // Brand assets: Lobe Icons (lobehub/lobe-icons). Utility assets: Lucide 0.468.0.
+    const ICONS = {"openai":"data:image/svg+xml;base64,PHN2ZyBmaWxsPSJjdXJyZW50Q29sb3IiIGZpbGwtcnVsZT0iZXZlbm9kZCIgaGVpZ2h0PSIxZW0iIHN0eWxlPSJmbGV4Om5vbmU7bGluZS1oZWlnaHQ6MSIgdmlld0JveD0iMCAwIDI0IDI0IiB3aWR0aD0iMWVtIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjx0aXRsZT5PcGVuQUk8L3RpdGxlPjxwYXRoIGQ9Ik05LjIwNSA4LjY1OHYtMi4yNmMwLS4xOS4wNzItLjMzMy4yMzgtLjQyOGw0LjU0My0yLjYxNmMuNjE5LS4zNTcgMS4zNTYtLjUyMyAyLjExNy0uNTIzIDIuODU0IDAgNC42NjIgMi4yMTIgNC42NjIgNC41NjYgMCAuMTY3IDAgLjM1Ny0uMDI0LjU0N2wtNC43MS0yLjc1OWEuNzk3Ljc5NyAwIDAwLS44NTYgMGwtNS45NyAzLjQ3M3ptMTAuNjA5IDguOFYxMi4wNmMwLS4zMzMtLjE0My0uNTctLjQyOS0uNzM3bC01Ljk3LTMuNDczIDEuOTUtMS4xMThhLjQzMy40MzMgMCAwMS40NzYgMGw0LjU0MyAyLjYxN2MxLjMwOS43NiAyLjE4OSAyLjM3OCAyLjE4OSAzLjk0OCAwIDEuODA4LTEuMDcgMy40NzMtMi43NiA0LjE2M3pNNy44MDIgMTIuNzAzbC0xLjk1LTEuMTQyYy0uMTY3LS4wOTUtLjIzOS0uMjM4LS4yMzktLjQyOFY1Ljg5OWMwLTIuNTQ1IDEuOTUtNC40NzIgNC41OTEtNC40NzIgMSAwIDEuOTI3LjMzMyAyLjcxMi45MjhMOC4yMyA1LjA2N2MtLjI4NS4xNjYtLjQyOC40MDQtLjQyOC43Mzd2Ni44OTh6TTEyIDE1LjEyOGwtMi43OTUtMS41N3YtMy4zM0wxMiA4LjY1OGwyLjc5NSAxLjU3djMuMzNMMTIgMTUuMTI4em0xLjc5NiA3LjIzYy0xIDAtMS45MjctLjMzMi0yLjcxMi0uOTI3bDQuNjg2LTIuNzEyYy4yODUtLjE2Ni40MjgtLjQwNC40MjgtLjczN3YtNi44OThsMS45NzQgMS4xNDJjLjE2Ny4wOTUuMjM4LjIzOC4yMzguNDI4djUuMjMzYzAgMi41NDUtMS45NzQgNC40NzItNC42MTQgNC40NzJ6bS01LjYzNy01LjMwM2wtNC41NDQtMi42MTdjLTEuMzA4LS43NjEtMi4xODgtMi4zNzgtMi4xODgtMy45NDhBNC40ODIgNC40ODIgMCAwMTQuMjEgNi4zMjd2NS40MjNjMCAuMzMzLjE0My41NzEuNDI4LjczOGw1Ljk0NyAzLjQ0OS0xLjk1IDEuMTE4YS40MzIuNDMyIDAgMDEtLjQ3NiAwem0tLjI2MiAzLjljLTIuNjg4IDAtNC42NjItMi4wMjEtNC42NjItNC41MTkgMC0uMTkuMDI0LS4zOC4wNDctLjU3bDQuNjg2IDIuNzFjLjI4Ni4xNjcuNTcxLjE2Ny44NTYgMGw1Ljk3LTMuNDQ4djIuMjZjMCAuMTktLjA3LjMzMy0uMjM3LjQyOGwtNC41NDMgMi42MTZjLS42MTkuMzU3LTEuMzU2LjUyMy0yLjExNy41MjN6bTUuODk5IDIuODNhNS45NDcgNS45NDcgMCAwMDUuODI3LTQuNzU2QzIyLjI4NyAxOC4zMzkgMjQgMTUuODQgMjQgMTMuMjk2YzAtMS42NjUtLjcxMy0zLjI4Mi0xLjk5OC00LjQ0OC4xMTktLjUuMTktLjk5OS4xOS0xLjQ5OCAwLTMuNDAxLTIuNzU5LTUuOTQ3LTUuOTQ2LTUuOTQ3LS42NDIgMC0xLjI2LjA5NS0xLjg4LjMxQTUuOTYyIDUuOTYyIDAgMDAxMC4yMDUgMGE1Ljk0NyA1Ljk0NyAwIDAwLTUuODI3IDQuNzU3QzEuNzEzIDUuNDQ3IDAgNy45NDUgMCAxMC40OWMwIDEuNjY2LjcxMyAzLjI4MyAxLjk5OCA0LjQ0OC0uMTE5LjUtLjE5IDEtLjE5IDEuNDk5IDAgMy40MDEgMi43NTkgNS45NDYgNS45NDYgNS45NDYuNjQyIDAgMS4yNi0uMDk1IDEuODgtLjMwOWE1Ljk2IDUuOTYgMCAwMDQuMTYyIDEuNzEzeiI+PC9wYXRoPjwvc3ZnPg==","claude":"data:image/svg+xml;base64,PHN2ZyBoZWlnaHQ9IjFlbSIgc3R5bGU9ImZsZXg6bm9uZTtsaW5lLWhlaWdodDoxIiB2aWV3Qm94PSIwIDAgMjQgMjQiIHdpZHRoPSIxZW0iIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHRpdGxlPkNsYXVkZTwvdGl0bGU+PHBhdGggZD0iTTQuNzA5IDE1Ljk1NWw0LjcyLTIuNjQ3LjA4LS4yMy0uMDgtLjEyOEg5LjJsLS43OS0uMDQ4LTIuNjk4LS4wNzMtMi4zMzktLjA5Ny0yLjI2Ni0uMTIyLS41NzEtLjEyMUwwIDExLjc4NGwuMDU1LS4zNTIuNDgtLjMyMS42ODYuMDYgMS41Mi4xMDMgMi4yNzguMTU4IDEuNjUyLjA5NyAyLjQ0OS4yNTVoLjM4OWwuMDU1LS4xNTctLjEzNC0uMDk4LS4xMDMtLjA5Ny0yLjM1OC0xLjU5Ni0yLjU1Mi0xLjY4OC0xLjMzNi0uOTcyLS43MjQtLjQ5MS0uMzY0LS40NjItLjE1OC0xLjAwOC42NTYtLjcyMi44ODEuMDYuMjI1LjA2MS44OTMuNjg2IDEuOTA4IDEuNDc2IDIuNDkxIDEuODMzLjM2NS4zMDQuMTQ1LS4xMDMuMDE5LS4wNzMtLjE2NC0uMjc0LTEuMzU1LTIuNDQ2LTEuNDQ2LTIuNDktLjY0NC0xLjAzMi0uMTctLjYxOWEyLjk3IDIuOTcgMCAwMS0uMTA0LS43MjlMNi4yODMuMTM0IDYuNjk2IDBsLjk5Ni4xMzQuNDIuMzY0LjYyIDEuNDE0IDEuMDAyIDIuMjI5IDEuNTU1IDMuMDMuNDU2Ljg5OC4yNDMuODMyLjA5MS4yNTVoLjE1OFY5LjAxbC4xMjgtMS43MDYuMjM3LTIuMDk1LjIzLTIuNjk1LjA4LS43Ni4zNzYtLjkxLjc0Ny0uNDkyLjU4NC4yOC40OC42ODUtLjA2Ny40NDQtLjI4NiAxLjg1MS0uNTU5IDIuOTAzLS4zNjQgMS45NDJoLjIxMmwuMjQzLS4yNDIuOTg1LTEuMzA2IDEuNjUyLTIuMDY0LjczLS44Mi44NS0uOTA0LjU0Ny0uNDMxaDEuMDMzbC43NiAxLjEyOS0uMzQgMS4xNjYtMS4wNjQgMS4zNDctLjg4MSAxLjE0Mi0xLjI2NCAxLjctLjc5IDEuMzYuMDczLjExLjE4OC0uMDIgMi44NTYtLjYwNiAxLjU0My0uMjggMS44NDEtLjMxNS44MzMuMzg4LjA5MS4zOTUtLjMyOC44MDctMS45NjkuNDg2LTIuMzA5LjQ2Mi0zLjQzOS44MTMtLjA0Mi4wMy4wNDkuMDYxIDEuNTQ5LjE0Ni42NjIuMDM2aDEuNjIybDMuMDIuMjI1Ljc5LjUyMi40NzQuNjM4LS4wNzkuNDg1LTEuMjE1LjYyLTEuNjQtLjM4OS0zLjgyOS0uOTEtMS4zMTItLjMyOWgtLjE4MnYuMTFsMS4wOTMgMS4wNjggMi4wMDYgMS44MSAyLjUwOSAyLjMzLjEyNy41NzgtLjMyMi40NTUtLjM0LS4wNDktMi4yMDUtMS42NTctLjg1MS0uNzQ3LTEuOTI2LTEuNjJoLS4xMjh2LjE3bC40NDQuNjQ5IDIuMzQ1IDMuNTIxLjEyMiAxLjA4LS4xNy4zNTMtLjYwOC4yMTMtLjY2OC0uMTIyLTEuMzc0LTEuOTI1LTEuNDE1LTIuMTY3LTEuMTQzLTEuOTQzLS4xNC4wOC0uNjc0IDcuMjU0LS4zMTYuMzctLjcyOS4yOC0uNjA3LS40NjEtLjMyMi0uNzQ3LjMyMi0xLjQ3Ni4zODktMS45MjQuMzE1LTEuNTMuMjg2LTEuOS4xNy0uNjMyLS4wMTItLjA0Mi0uMTQuMDE4LTEuNDM0IDEuOTY3LTIuMTggMi45NDUtMS43MjYgMS44NDUtLjQxNC4xNjQtLjcxNy0uMzcuMDY3LS42NjIuNDAxLS41ODkgMi4zODgtMy4wMzYgMS40NC0xLjg4Mi45My0xLjA4Ni0uMDA2LS4xNThoLS4wNTVMNC4xMzIgMTguNTZsLTEuMTMuMTQ2LS40ODctLjQ1Ni4wNjEtLjc0Ni4yMzEtLjI0MyAxLjkwOC0xLjMxMi0uMDA2LjAwNnoiIGZpbGw9IiNEOTc3NTciIGZpbGwtcnVsZT0ibm9uemVybyI+PC9wYXRoPjwvc3ZnPg==","chevron":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtY2hldnJvbi1kb3duIgogIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKICB3aWR0aD0iMjQiCiAgaGVpZ2h0PSIyNCIKICB2aWV3Qm94PSIwIDAgMjQgMjQiCiAgZmlsbD0ibm9uZSIKICBzdHJva2U9ImN1cnJlbnRDb2xvciIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8cGF0aCBkPSJtNiA5IDYgNiA2LTYiIC8+Cjwvc3ZnPgo=","check":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtY2hlY2siCiAgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIgogIHdpZHRoPSIyNCIKICBoZWlnaHQ9IjI0IgogIHZpZXdCb3g9IjAgMCAyNCAyNCIKICBmaWxsPSJub25lIgogIHN0cm9rZT0iY3VycmVudENvbG9yIgogIHN0cm9rZS13aWR0aD0iMiIKICBzdHJva2UtbGluZWNhcD0icm91bmQiCiAgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIKPgogIDxwYXRoIGQ9Ik0yMCA2IDkgMTdsLTUtNSIgLz4KPC9zdmc+Cg==","close":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUteCIKICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgd2lkdGg9IjI0IgogIGhlaWdodD0iMjQiCiAgdmlld0JveD0iMCAwIDI0IDI0IgogIGZpbGw9Im5vbmUiCiAgc3Ryb2tlPSJjdXJyZW50Q29sb3IiCiAgc3Ryb2tlLXdpZHRoPSIyIgogIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICBzdHJva2UtbGluZWpvaW49InJvdW5kIgo+CiAgPHBhdGggZD0iTTE4IDYgNiAxOCIgLz4KICA8cGF0aCBkPSJtNiA2IDEyIDEyIiAvPgo8L3N2Zz4K","refresh":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtcmVmcmVzaC1jdyIKICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgd2lkdGg9IjI0IgogIGhlaWdodD0iMjQiCiAgdmlld0JveD0iMCAwIDI0IDI0IgogIGZpbGw9Im5vbmUiCiAgc3Ryb2tlPSJjdXJyZW50Q29sb3IiCiAgc3Ryb2tlLXdpZHRoPSIyIgogIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICBzdHJva2UtbGluZWpvaW49InJvdW5kIgo+CiAgPHBhdGggZD0iTTMgMTJhOSA5IDAgMCAxIDktOSA5Ljc1IDkuNzUgMCAwIDEgNi43NCAyLjc0TDIxIDgiIC8+CiAgPHBhdGggZD0iTTIxIDN2NWgtNSIgLz4KICA8cGF0aCBkPSJNMjEgMTJhOSA5IDAgMCAxLTkgOSA5Ljc1IDkuNzUgMCAwIDEtNi43NC0yLjc0TDMgMTYiIC8+CiAgPHBhdGggZD0iTTggMTZIM3Y1IiAvPgo8L3N2Zz4K","reset":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtcm90YXRlLWNjdyIKICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgd2lkdGg9IjI0IgogIGhlaWdodD0iMjQiCiAgdmlld0JveD0iMCAwIDI0IDI0IgogIGZpbGw9Im5vbmUiCiAgc3Ryb2tlPSJjdXJyZW50Q29sb3IiCiAgc3Ryb2tlLXdpZHRoPSIyIgogIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICBzdHJva2UtbGluZWpvaW49InJvdW5kIgo+CiAgPHBhdGggZD0iTTMgMTJhOSA5IDAgMSAwIDktOSA5Ljc1IDkuNzUgMCAwIDAtNi43NCAyLjc0TDMgOCIgLz4KICA8cGF0aCBkPSJNMyAzdjVoNSIgLz4KPC9zdmc+Cg==","alert":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtY2lyY2xlLWFsZXJ0IgogIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIKICB3aWR0aD0iMjQiCiAgaGVpZ2h0PSIyNCIKICB2aWV3Qm94PSIwIDAgMjQgMjQiCiAgZmlsbD0ibm9uZSIKICBzdHJva2U9ImN1cnJlbnRDb2xvciIKICBzdHJva2Utd2lkdGg9IjIiCiAgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIgogIHN0cm9rZS1saW5lam9pbj0icm91bmQiCj4KICA8Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIgLz4KICA8bGluZSB4MT0iMTIiIHgyPSIxMiIgeTE9IjgiIHkyPSIxMiIgLz4KICA8bGluZSB4MT0iMTIiIHgyPSIxMi4wMSIgeTE9IjE2IiB5Mj0iMTYiIC8+Cjwvc3ZnPgo=","connect":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtcGx1ZyIKICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgd2lkdGg9IjI0IgogIGhlaWdodD0iMjQiCiAgdmlld0JveD0iMCAwIDI0IDI0IgogIGZpbGw9Im5vbmUiCiAgc3Ryb2tlPSJjdXJyZW50Q29sb3IiCiAgc3Ryb2tlLXdpZHRoPSIyIgogIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICBzdHJva2UtbGluZWpvaW49InJvdW5kIgo+CiAgPHBhdGggZD0iTTEyIDIydi01IiAvPgogIDxwYXRoIGQ9Ik05IDhWMiIgLz4KICA8cGF0aCBkPSJNMTUgOFYyIiAvPgogIDxwYXRoIGQ9Ik0xOCA4djVhNCA0IDAgMCAxLTQgNGgtNGE0IDQgMCAwIDEtNC00VjhaIiAvPgo8L3N2Zz4K","settings":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtc2V0dGluZ3MtMiIKICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgd2lkdGg9IjI0IgogIGhlaWdodD0iMjQiCiAgdmlld0JveD0iMCAwIDI0IDI0IgogIGZpbGw9Im5vbmUiCiAgc3Ryb2tlPSJjdXJyZW50Q29sb3IiCiAgc3Ryb2tlLXdpZHRoPSIyIgogIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICBzdHJva2UtbGluZWpvaW49InJvdW5kIgo+CiAgPHBhdGggZD0iTTIwIDdoLTkiIC8+CiAgPHBhdGggZD0iTTE0IDE3SDUiIC8+CiAgPGNpcmNsZSBjeD0iMTciIGN5PSIxNyIgcj0iMyIgLz4KICA8Y2lyY2xlIGN4PSI3IiBjeT0iNyIgcj0iMyIgLz4KPC9zdmc+Cg==","loader":"data:image/svg+xml;base64,PCEtLSBAbGljZW5zZSBsdWNpZGUtc3RhdGljIHYwLjQ2OC4wIC0gSVNDIC0tPgo8c3ZnCiAgY2xhc3M9Imx1Y2lkZSBsdWNpZGUtbG9hZGVyLWNpcmNsZSIKICB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciCiAgd2lkdGg9IjI0IgogIGhlaWdodD0iMjQiCiAgdmlld0JveD0iMCAwIDI0IDI0IgogIGZpbGw9Im5vbmUiCiAgc3Ryb2tlPSJjdXJyZW50Q29sb3IiCiAgc3Ryb2tlLXdpZHRoPSIyIgogIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIKICBzdHJva2UtbGluZWpvaW49InJvdW5kIgo+CiAgPHBhdGggZD0iTTIxIDEyYTkgOSAwIDEgMS02LjIxOS04LjU2IiAvPgo8L3N2Zz4K"};
+    const providers = { openai: { name: "ChatGPT" }, claude: { name: "Claude" } };
+    const models = {
+      openai: [
+        ["gpt-6-astra", "GPT-6 Astra"], ["gpt-5.6-sol", "GPT-5.6 Sol"],
+        ["gpt-5.6-terra", "GPT-5.6 Terra"], ["gpt-5.6-luna", "GPT-5.6 Luna"],
+        ["gpt-5.5", "GPT-5.5"], ["gpt-5.3-codex-spark", "GPT-5.3 Codex Spark"]
+      ],
+      claude: [
+        ["claude-fable-5-1", "Fable 5.1"], ["claude-opus-5", "Opus 5"],
+        ["claude-sonnet-5", "Sonnet 5"], ["claude-fable-5", "Fable 5"],
+        ["claude-opus-4-8", "Opus 4.8"], ["claude-opus-4-7", "Opus 4.7"],
+        ["claude-sonnet-4-6", "Sonnet 4.6"], ["claude-opus-4-6", "Opus 4.6"],
+        ["claude-opus-4-5-20251101", "Opus 4.5"],
+        ["claude-haiku-4-5-20251001", "Haiku 4.5"], ["claude-sonnet-4-5-20250929", "Sonnet 4.5"]
+      ]
+    };
+    const snapshots = [
+      { openai: "gpt-6-astra", claude: "claude-opus-5" },
+      { openai: "gpt-5.6-sol", claude: "claude-sonnet-5" }
+    ];
+    const initialPrompts = {
+      chat: "You are Expotify's music assistant. Help me find and play music, manage my library, and adjust playback.\n\nKeep responses brief and conversational.",
+      insight: "Share a concise insight about the current track: its musical character, context, and something worth listening for.\n\nTrack: {name}\nArtist: {artist}\nAlbum: {album}"
+    };
+    const $ = (id) => document.getElementById(id);
+    const defaultChoice = (provider) => ({ provider, mode: "default" });
+    let choices = { chat: defaultChoice("openai"), insight: defaultChoice("claude") };
+    let prompts = { ...initialPrompts };
+    let memories = [];
+    let webSearch = true;
+    let saved = snapshotSettings();
+    let activeTab = "chat";
+    let connected = ["openai", "claude"];
+    let scenario = "both";
+    let revision = 0;
+    let menuOpen = false;
+    let options = [];
+    let activeIndex = 0;
+    let refreshTimer;
+    function snapshotSettings() { return structuredClone({ choices, prompts, memories, webSearch }); }
+    function icon(name, brand = false) {
+      const img = document.createElement("img");
+      img.src = ICONS[name]; img.alt = "";
+      img.className = `icon ${brand ? `brand ${name}` : "utility"}`;
+      return img;
+    }
+    function hydrateIcons(root = document) { root.querySelectorAll("[data-icon]").forEach((img) => { img.src = ICONS[img.dataset.icon]; }); }
+    function hasCatalog() { return !["cold", "cold-error"].includes(scenario); }
+    function isLoading() { return ["loading", "cold"].includes(scenario); }
+    function modelName(provider, id) { return models[provider].find((entry) => entry[0] === id)?.[1] ?? (id === "gpt-5.4" ? "GPT-5.4" : id); }
+    function choiceKey(choice) { return `${choice.provider}:${choice.mode}:${choice.model ?? ""}`; }
+    function validChoice(choice) {
+      return choice && connected.includes(choice.provider) && (choice.mode === "default" ? hasCatalog() : models[choice.provider].some(([id]) => id === choice.model));
+    }
+    function labelContent(choice, detail = "") {
+      const fragment = document.createDocumentFragment();
+      fragment.append(icon(choice.provider, true));
+      const copy = document.createElement("span"); copy.className = "model-copy";
+      const title = document.createElement("span"); title.className = "model-title";
+      const provider = document.createElement("span"); provider.className = "provider-tag"; provider.textContent = providers[choice.provider].name;
+      const name = document.createElement("span"); name.className = "model-name";
+      name.textContent = choice.mode === "default" ? "Default" : modelName(choice.provider, choice.model);
+      title.append(provider, name); copy.append(title);
+      if (detail) { const secondary = document.createElement("span"); secondary.className = "model-detail"; secondary.textContent = detail; copy.append(secondary); }
+      fragment.append(copy); return fragment;
+    }
+    function defaultDetail(provider) {
+      if (!hasCatalog()) return scenario === "cold" ? "Fetching default..." : "Default unavailable";
+      return modelName(provider, snapshots[revision][provider]);
+    }
+    function renderTrigger() {
+      const choice = choices[activeTab === "memories" ? "chat" : activeTab];
+      const trigger = $("model-trigger"); trigger.replaceChildren();
+      const available = validChoice(choice);
+      trigger.classList.toggle("invalid", Boolean(connected.length && !available && hasCatalog()));
+      trigger.disabled = !connected.length;
+      if (!connected.length) {
+        trigger.append(icon("connect"));
+        const text = document.createElement("span"); text.className = "model-name"; text.textContent = "No accounts connected"; trigger.append(text);
+        trigger.setAttribute("aria-label", "Model: no accounts connected");
+      } else {
+        const detail = !connected.includes(choice.provider) ? "Account disconnected" : choice.mode === "default" ? defaultDetail(choice.provider) : available ? choice.model : "Unavailable";
+        trigger.append(labelContent(choice, detail));
+        const chevron = icon("chevron"); chevron.classList.add("chevron"); trigger.append(chevron);
+        trigger.setAttribute("aria-label", `${providers[choice.provider].name} ${choice.mode === "default" ? "Default" : modelName(choice.provider, choice.model)}, ${detail}`);
+      }
+      $("account-count").replaceChildren();
+      if (connected.length) {
+        const dot = document.createElement("span"); dot.className = "status-dot";
+        $("account-count").append(dot, document.createTextNode(`${connected.length} ${connected.length === 1 ? "account" : "accounts"}`));
+      }
+      $("connection-empty").hidden = Boolean(connected.length);
+      $("save").disabled = !validChoice(choices.chat) || !validChoice(choices.insight);
+    }
+    function renderMenu() {
+      const list = $("model-list"); const scrollTop = list.scrollTop; list.replaceChildren(); options = [];
+      const selection = choices[activeTab];
+      function group(title) {
+        const section = document.createElement("section"); section.className = "group"; section.setAttribute("role", "group");
+        const heading = document.createElement("h2"); heading.className = "group-heading"; heading.id = `group-${title.toLowerCase().replaceAll(" ", "-")}`; heading.textContent = title;
+        section.setAttribute("aria-labelledby", heading.id); section.append(heading); list.append(section); return section;
+      }
+      function add(parent, choice, detail = "", disabled = false) {
+        const index = options.length;
+        const button = document.createElement("button"); button.type = "button";
+        button.className = `option${choice.mode === "default" ? " default-option" : ""}`;
+        button.setAttribute("role", "option"); button.tabIndex = -1; button.id = `model-option-${index}`;
+        const selected = choiceKey(choice) === choiceKey(selection);
+        button.setAttribute("aria-selected", String(selected)); button.disabled = disabled;
+        button.dataset.index = String(index); button.dataset.choice = choiceKey(choice);
+        button.append(labelContent(choice, detail));
+        const check = icon("check"); check.classList.add("check"); if (selected) check.classList.add("selected"); button.append(check);
+        parent.append(button); options.push({ choice, button, disabled });
+      }
+      if (selection.mode === "fixed" && connected.includes(selection.provider) && !validChoice(selection)) add(group("Selected"), selection, "Unavailable", true);
+      if (connected.length) {
+        const defaults = group("Default");
+        connected.forEach((provider) => add(defaults, defaultChoice(provider), defaultDetail(provider), !hasCatalog()));
+        if (hasCatalog()) connected.forEach((provider) => {
+          const section = group(providers[provider].name);
+          models[provider].forEach(([id]) => add(section, { provider, mode: "fixed", model: id }));
+        });
+      }
+      const selectedIndex = options.findIndex(({ button, disabled }) => button.getAttribute("aria-selected") === "true" && !disabled);
+      activeIndex = selectedIndex < 0 ? options.findIndex(({ disabled }) => !disabled) : selectedIndex;
+      setActive(activeIndex, false); list.scrollTop = scrollTop;
+      renderCatalogStatus();
+    }
+    function renderCatalogStatus() {
+      const status = $("catalog-status"); status.replaceChildren();
+      let text = "Updated just now";
+      if (isLoading()) { const spinner = icon("loader"); spinner.classList.add("spin"); status.append(spinner); text = scenario === "cold" ? "Fetching models..." : "Refreshing saved list..."; }
+      else if (["error", "cold-error"].includes(scenario)) { status.append(icon("alert")); text = scenario === "error" ? "Refresh failed. Saved list shown." : "Couldn't load models"; }
+      else { const dot = document.createElement("span"); dot.className = "status-dot"; status.append(dot); }
+      status.append(document.createTextNode(text));
+      $("refresh").disabled = isLoading();
+    }
+    function placeMenu() {
+      if (!menuOpen) return;
+      const rect = $("model-trigger").getBoundingClientRect();
+      const margin = 10, gap = 6, footerAllowance = 70;
+      const below = window.innerHeight - rect.bottom - margin - gap;
+      const above = rect.top - margin - gap;
+      const popover = $("popover");
+      const compact = Math.max(above, below) < 280 || (window.innerWidth <= 420 && window.innerHeight < 620);
+      popover.classList.toggle("compact", compact);
+      if (compact) {
+        const width = Math.min(400, window.innerWidth - 28);
+        popover.style.width = `${width}px`;
+        popover.style.maxHeight = `${window.innerHeight - 28}px`;
+        popover.style.left = `${(window.innerWidth - width) / 2}px`;
+        popover.style.top = "auto"; popover.style.bottom = "14px";
+        return;
+      }
+      const useAbove = below < 180 && above > below;
+      const height = Math.max(footerAllowance, Math.min(362, useAbove ? above : below));
+      popover.style.width = `${Math.min(rect.width, window.innerWidth - margin * 2)}px`;
+      popover.style.maxHeight = `${height}px`;
+      popover.style.left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - rect.width - margin))}px`;
+      popover.style.top = useAbove ? "auto" : `${rect.bottom + gap}px`;
+      popover.style.bottom = useAbove ? `${window.innerHeight - rect.top + gap}px` : "auto";
+    }
+    function openMenu(focus = true) {
+      if (!connected.length || activeTab === "memories") return;
+      menuOpen = true; $("popover").hidden = false;
+      $("model-trigger").setAttribute("aria-expanded", "true"); renderMenu(); placeMenu();
+      if (focus) $("model-list").focus({ preventScroll: true });
+      setActive(activeIndex, true);
+    }
+    function closeMenu(returnFocus = false) {
+      menuOpen = false; $("popover").hidden = true;
+      $("model-trigger").setAttribute("aria-expanded", "false");
+      if (returnFocus) $("model-trigger").focus({ preventScroll: true });
+    }
+    function setActive(index, scroll = true) {
+      activeIndex = index;
+      options.forEach(({ button }, i) => { button.dataset.active = String(i === index); });
+      if (index >= 0 && options[index]) {
+        $("model-list").setAttribute("aria-activedescendant", options[index].button.id);
+        if (scroll) options[index].button.scrollIntoView({ block: "nearest" });
+      } else $("model-list").removeAttribute("aria-activedescendant");
+    }
+    function choose(index) {
+      const option = options[index]; if (!option || option.disabled) return;
+      choices[activeTab] = { ...option.choice }; $("save-status").textContent = "";
+      renderTrigger(); closeMenu(true);
+    }
+    function renderTabs() {
+      document.querySelectorAll("[data-tab]").forEach((button) => {
+        button.setAttribute("aria-selected", String(button.dataset.tab === activeTab)); button.tabIndex = button.dataset.tab === activeTab ? 0 : -1;
+      });
+      const isMemory = activeTab === "memories";
+      $("model-panel").hidden = isMemory; $("memories-panel").hidden = !isMemory;
+      if (!isMemory) {
+        $("model-panel").setAttribute("aria-labelledby", `tab-${activeTab}`);
+        $("prompt-label").textContent = activeTab === "chat" ? "Chat Prompt" : "Prompt";
+        $("prompt").value = prompts[activeTab]; $("web-search-row").hidden = activeTab !== "insight";
+      }
+      $("web-search").checked = webSearch;
+      renderTrigger(); renderMemories();
+    }
+    function renderMemories() {
+      $("memories-empty").hidden = Boolean(memories.length); $("memory-list").replaceChildren();
+      memories.forEach((memory, index) => {
+        const row = document.createElement("li"); const text = document.createElement("span"); text.textContent = memory;
+        const remove = document.createElement("button"); remove.className = "icon-button"; remove.title = "Delete memory"; remove.setAttribute("aria-label", `Delete memory: ${memory}`); remove.append(icon("close"));
+        remove.addEventListener("click", () => { memories.splice(index, 1); renderMemories(); $("save-status").textContent = ""; });
+        row.append(text, remove); $("memory-list").append(row);
+      });
+    }
+    function configureScenario(value) {
+      clearTimeout(refreshTimer); scenario = value; $("scenario").value = value;
+      connected = value === "none" ? [] : ["openai", "claude"].includes(value) ? [value] : ["openai", "claude"];
+      choices = { chat: defaultChoice(connected[0] ?? "openai"), insight: defaultChoice(connected.at(-1) ?? "claude") };
+      if (value === "unavailable") choices.chat = { provider: "openai", mode: "fixed", model: "gpt-5.4" };
+      saved = snapshotSettings(); $("save-status").textContent = "";
+      closeMenu(); renderTabs(); if (connected.length && activeTab !== "memories") openMenu(false);
+    }
+    $("model-trigger").addEventListener("click", () => menuOpen ? closeMenu() : openMenu());
+    $("close-picker").addEventListener("click", () => closeMenu(true));
+    $("model-trigger").addEventListener("keydown", (event) => { if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); openMenu(); } });
+    $("model-list").addEventListener("click", (event) => { const button = event.target.closest(".option"); if (button) choose(Number(button.dataset.index)); });
+    $("model-list").addEventListener("pointermove", (event) => { const button = event.target.closest(".option"); if (button && !button.disabled) setActive(Number(button.dataset.index), false); });
+    $("model-list").addEventListener("keydown", (event) => {
+      const enabled = options.flatMap((option, index) => option.disabled ? [] : [index]);
+      if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+        event.preventDefault(); if (!enabled.length) return;
+        const current = enabled.indexOf(activeIndex);
+        const next = event.key === "Home" ? 0 : event.key === "End" ? enabled.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + enabled.length) % enabled.length;
+        setActive(enabled[next]);
+      } else if (["Enter", " "].includes(event.key)) { event.preventDefault(); choose(activeIndex); }
+      else if (event.key === "Escape") { event.preventDefault(); closeMenu(true); }
+    });
+    $("popover").addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); closeMenu(true); } });
+    document.addEventListener("pointerdown", (event) => { if (menuOpen && !$("popover").contains(event.target) && !$("model-trigger").contains(event.target)) closeMenu(); });
+    document.addEventListener("focusin", (event) => { if (menuOpen && !$("popover").contains(event.target) && event.target !== $("model-trigger")) closeMenu(); });
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && menuOpen) { event.preventDefault(); closeMenu(true); } });
+    window.addEventListener("resize", placeMenu);
+    $("settings").querySelector(".settings-body").addEventListener("scroll", () => closeMenu());
+    document.querySelectorAll("[data-tab]").forEach((button) => {
+      button.addEventListener("click", () => { closeMenu(); activeTab = button.dataset.tab; renderTabs(); });
+      button.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault(); const tabs = [...document.querySelectorAll("[data-tab]")]; const current = tabs.indexOf(button);
+        const index = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[index].click(); tabs[index].focus();
+      });
+    });
+    $("prompt").addEventListener("input", () => { prompts[activeTab] = $("prompt").value; $("save-status").textContent = ""; });
+    $("reset-prompt").addEventListener("click", () => { prompts[activeTab] = initialPrompts[activeTab]; $("prompt").value = prompts[activeTab]; $("save-status").textContent = ""; });
+    $("web-search").addEventListener("change", () => { webSearch = $("web-search").checked; $("save-status").textContent = ""; });
+    $("memory-form").addEventListener("submit", (event) => { event.preventDefault(); const value = $("new-memory").value.trim(); if (!value) return; memories.push(value); $("new-memory").value = ""; renderMemories(); $("save-status").textContent = ""; });
+    function dismiss(discard) {
+      closeMenu();
+      if (discard) { const restored = structuredClone(saved); choices = restored.choices; prompts = restored.prompts; memories = restored.memories; webSearch = restored.webSearch; }
+      $("settings").hidden = true; $("reopen").hidden = false; $("reopen").focus();
+    }
+    $("save").addEventListener("click", () => { saved = snapshotSettings(); $("save-status").textContent = "Saved"; closeMenu(); });
+    $("cancel").addEventListener("click", () => dismiss(true));
+    $("close-settings").addEventListener("click", () => dismiss(true));
+    $("reopen").addEventListener("click", () => { $("settings").hidden = false; $("reopen").hidden = true; $("save-status").textContent = ""; renderTabs(); $("model-trigger").focus(); });
+    $("scenario").addEventListener("change", () => { $("settings").hidden = false; $("reopen").hidden = true; configureScenario($("scenario").value); });
+    $("snapshot").addEventListener("change", () => { revision = Number($("snapshot").value); renderTrigger(); if (menuOpen) { renderMenu(); placeMenu(); } });
+    document.querySelectorAll("[data-connect]").forEach((button) => button.addEventListener("click", () => configureScenario(button.dataset.connect)));
+    $("refresh").addEventListener("click", () => {
+      if (isLoading()) return;
+      scenario = hasCatalog() ? "loading" : "cold"; $("scenario").value = scenario; renderTrigger(); renderMenu(); placeMenu();
+      refreshTimer = setTimeout(() => { scenario = connected.length === 2 ? "both" : connected[0]; $("scenario").value = scenario; renderTrigger(); renderMenu(); placeMenu(); }, 900);
+    });
+    // Exposes only mock state for browser verification, never account data.
+    window.mockState = () => structuredClone({ choices, connected, revision, scenario, activeTab, saved });
+    hydrateIcons(); renderTabs(); openMenu(false);
+  </script>
+</body>
+</html>
