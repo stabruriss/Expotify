@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, type KeyboardEvent } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, type KeyboardEvent } from "react";
 import Markdown from "react-markdown";
+import { RotateCcw } from "lucide-react";
 import type { ChatEntry } from "../hooks/useAgentChat";
 import { useIMEComposition } from "../hooks/useIMEComposition";
 
@@ -29,21 +30,27 @@ export function AgentChat({
   onTtsVolumeChange,
 }: AgentChatProps) {
   const [input, setInput] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
   const inputRef = useRef<HTMLInputElement>(null);
   const { onCompositionEnd, isIMEEnter } = useIMEComposition();
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [entries]);
+  useLayoutEffect(() => {
+    const messages = messagesRef.current;
+    if (messages && followLatestRef.current) {
+      // Scroll only the transcript, never its clipped overlay ancestors.
+      messages.scrollTop = messages.scrollHeight;
+    }
+  }, [entries, loading]);
 
   useEffect(() => {
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   const handleSend = () => {
     const text = input.trim();
     if (!text || loading) return;
+    followLatestRef.current = true;
     setInput("");
     sendMessage(text);
   };
@@ -70,7 +77,8 @@ export function AgentChat({
           <button
             className={`agent-chat-read-toggle${chatReadEnabled ? " active" : ""}`}
             onClick={onToggleChatRead}
-            title={chatReadEnabled ? "Auto read: ON" : "Auto read: OFF"}
+            aria-pressed={chatReadEnabled}
+            title={chatReadEnabled ? "Automatically read chat replies: ON" : "Automatically read chat replies: OFF"}
           >
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M11 5L5.5 7.5V12.5L11 10Z" />
@@ -90,22 +98,24 @@ export function AgentChat({
               className="overlay-tts-slider"
               min={0}
               max={100}
+              aria-label="Speech volume"
               value={Math.round(ttsVolume * 100)}
               onChange={(e) => onTtsVolumeChange(Number(e.target.value) / 100)}
             />
           </div>
-          <button className="agent-chat-reset" onClick={reset} title="Reset conversation">
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M2 8a6 6 0 0110.47-4" />
-              <path d="M14 8a6 6 0 01-10.47 4" />
-              <path d="M12.47 1v3h-3" />
-              <path d="M3.53 15v-3h3" />
-            </svg>
-            Reset
+          <button className="agent-chat-reset" onClick={reset} title="Reset conversation" aria-label="Reset conversation">
+            <RotateCcw size={12} />
           </button>
         </div>
       </div>
-      <div className="agent-chat-messages">
+      <div
+        ref={messagesRef}
+        className="agent-chat-messages"
+        onScroll={(event) => {
+          const messages = event.currentTarget;
+          followLatestRef.current = messages.scrollHeight - messages.clientHeight - messages.scrollTop < 40;
+        }}
+      >
         {entries.length === 0 && (
           <div className="agent-chat-empty">Ask me to search and play music, like songs, or adjust volume</div>
         )}
@@ -123,7 +133,6 @@ export function AgentChat({
             <span className="agent-chat-text agent-chat-loading-dots">Thinking</span>
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
       <div className="agent-chat-input-row">
         <input

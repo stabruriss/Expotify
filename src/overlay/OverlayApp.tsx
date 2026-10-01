@@ -823,7 +823,11 @@ export default function OverlayApp() {
 
   /* Update notification bar */
   const updateBar = updateAvailable ? (
-    <div className="overlay-update-bar" data-no-drag="true">
+    <div
+      className="overlay-update-bar"
+      data-no-drag="true"
+      inert={activePanel !== null && !collapsed && spotifyRunning && !!track}
+    >
       <button className="overlay-update-btn" onClick={openRelease}>
         v{latestVersion} available
       </button>
@@ -1074,7 +1078,7 @@ export default function OverlayApp() {
       <div className="overlay-content">
         {updateBar}
         {/* Header: vinyl cover + song info + open button + AI stamp */}
-        <div className="overlay-header">
+        <div className="overlay-header" inert={activePanel !== null}>
           {coverArea}
           <div className="overlay-meta">
             <div className="overlay-track-name">{track.name}</div>
@@ -1118,8 +1122,8 @@ export default function OverlayApp() {
           </div>
         </div>
 
-        {/* Control bar: volume slider + action buttons (always visible) */}
-        <div className="overlay-control-bar" data-no-drag="true">
+        {/* Player controls are covered while a panel is open. */}
+        <div className="overlay-control-bar" data-no-drag="true" inert={activePanel !== null}>
           <div className="overlay-volume">
             <svg className="overlay-volume-icon" width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 2.5L4.5 5.5H2v5h2.5L8 13.5V2.5z" />
@@ -1225,8 +1229,8 @@ export default function OverlayApp() {
           </div>
         )}
 
-        {/* Body: lyrics + panel overlays */}
-        <div className="overlay-body" onWheel={handleLyricsWheel}>
+        {/* Body: lyrics */}
+        <div className="overlay-body" onWheel={handleLyricsWheel} inert={activePanel !== null}>
           {/* Refresh lyrics button */}
           <div className="overlay-btn-group" data-no-drag="true">
             <button
@@ -1292,7 +1296,10 @@ export default function OverlayApp() {
               <div className="overlay-no-lyrics">No lyrics available</div>
             )}
           </div>
+        </div>
 
+        {/* Panels share the full inner frame, independently of the lyrics layout. */}
+        <div className="overlay-panel-layer">
           {/* AI Insight panel */}
           {activePanel === "ai" && (
             <div className="overlay-panel" data-no-drag="true">
@@ -1435,7 +1442,7 @@ export default function OverlayApp() {
                   <path d="M2 2l8 8M10 2l-8 8" />
                 </svg>
               </button>
-              <div className="overlay-panel-content" data-no-drag="true" style={{ padding: 0 }}>
+              <div className="overlay-panel-content overlay-panel-content-fixed" data-no-drag="true">
                 <AgentChat
                   onClose={() => setActivePanel(null)}
                   entries={chatEntries}
@@ -1461,7 +1468,7 @@ export default function OverlayApp() {
                   <path d="M2 2l8 8M10 2l-8 8" />
                 </svg>
               </button>
-              <div className="overlay-panel-content" data-no-drag="true" style={{ padding: 0 }}>
+              <div className="overlay-panel-content overlay-panel-content-fixed" data-no-drag="true">
                 <DevicePicker onClose={() => setActivePanel(null)} />
               </div>
             </div>

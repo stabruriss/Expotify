@@ -129,6 +129,7 @@ html, body, #root {
 /* ============ Frame ============ */
 
 .overlay-frame {
+  --overlay-content-inset: 24px 36px 20px;
   width: 100%;
   height: 100%;
   position: relative;
@@ -155,7 +156,7 @@ html, body, #root {
   flex-direction: column;
   width: 100%;
   height: 100%;
-  padding: 24px 36px 20px;
+  padding: var(--overlay-content-inset);
 }
 
 /* ============ Header ============ */
@@ -541,7 +542,14 @@ html, body, #root {
   to { transform: rotate(360deg); }
 }
 
-/* ============ Unified Panel (full-width overlay on body) ============ */
+/* ============ Unified Panel (full inner-frame overlay) ============ */
+
+.overlay-panel-layer {
+  position: absolute;
+  inset: var(--overlay-content-inset);
+  z-index: 16;
+  pointer-events: none;
+}
 
 .overlay-panel {
   position: absolute;
@@ -549,6 +557,8 @@ html, body, #root {
   z-index: 5;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   padding: 8px 12px;
   background: transparent;
   pointer-events: auto;
@@ -601,9 +611,18 @@ html, body, #root {
   padding: 4px 4px;
   text-align: left;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   animation: panel-fade-in 0.35s ease-out;
+}
+
+/* Chat and device lists own their scroll area; their wrapper must stay fixed. */
+.overlay-panel-content-fixed {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
 }
 
 .overlay-panel-content::-webkit-scrollbar {
@@ -618,6 +637,7 @@ html, body, #root {
 /* AI Insight panel header (mirrors agent-chat-header) */
 .overlay-ai-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   padding: 6px 12px 6px 0;
   border-bottom: 1px solid rgba(254,223,225,0.10);
@@ -634,6 +654,8 @@ html, body, #root {
 
 .overlay-ai-header-btns {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   margin-left: auto;
@@ -1071,6 +1093,8 @@ html, body, #root {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1092,6 +1116,7 @@ html, body, #root {
 
 .agent-chat-header-btns {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   margin-left: auto;
@@ -1176,15 +1201,15 @@ html, body, #root {
 .agent-chat-reset {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
   background: none;
   border: none;
   color: rgba(254,223,225,0.32);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.3px;
   cursor: pointer;
-  padding: 2px 5px;
+  padding: 4px;
   border-radius: 3px;
   transition: color 0.2s;
 }
@@ -1195,7 +1220,9 @@ html, body, #root {
 
 .agent-chat-messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px 12px;
   display: flex;
   flex-direction: column;
@@ -1224,6 +1251,7 @@ html, body, #root {
 .agent-chat-msg {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 2px;
   max-width: 100%;
 }
@@ -1362,6 +1390,8 @@ html, body, #root {
   flex-direction: column;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1379,8 +1409,10 @@ html, body, #root {
 
 .device-picker-list {
   flex: 1;
+  min-height: 0;
   padding: 4px 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .device-picker-empty {
