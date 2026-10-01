@@ -1,4 +1,6 @@
 import path from "node:path";
+import { z } from "zod";
+import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import packageInfo from "../../package.json" with { type: "json" };
 
 const SYSTEM_ENV = [
@@ -35,6 +37,92 @@ export function queryOptions(request, cliPath, env) {
     cwd: path.join(request.configDir, "workspace"),
     pathToClaudeCodeExecutable: cliPath,
     env,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Native tool calling: the Rust side owns the tool registry (JSON Schema) and the
+// executor. The helper only converts the schema for the SDK and relays each call
+// over a line protocol: helper -> stdout `{"type":"tool_call",id,name,args}`,
+// Rust -> stdin `{"type":"tool_result",id,ok,output}`. No tool logic lives here.
+// ---------------------------------------------------------------------------
+
+/** Convert the registry's strict JSON Schema subset (object of string/integer/number
+ *  properties with optional enum/minimum/maximum/description) into a Zod raw shape. */
+export function zodShapeFromJsonSchema(schema) {
+  if (!schema || schema.type !== "object") throw new Error("tool parameters must be an object schema");
+  const required = new Set(schema.required ?? []);
+  const shape = {};
+  for (const [key, prop] of Object.entries(schema.properties ?? {})) {
+    let field;
+    if (Array.isArray(prop.enum)) field = z.enum(prop.enum);
+    else if (prop.type === "string") field = z.string();
+    else if (prop.type === "integer" || prop.type === "number") {
+      field = z.number();
+      if (prop.type === "integer") field = field.int();
+      if (typeof prop.minimum === "number") field = field.min(prop.minimum);
+      if (typeof prop.maximum === "number") field = field.max(prop.maximum);
+    } else if (prop.type === "boolean") field = z.boolean();
+    else throw new Error(`unsupported parameter type for ${key}: ${prop.type}`);
+    if (typeof prop.description === "string") field = field.describe(prop.description);
+    shape[key] = required.has(key) ? field : field.optional();
+  }
+  return shape;
+}
+
+/** Build the in-process MCP server. `dispatch({name,args})` must resolve to {ok, output}. */
+export function buildToolServer(definitions, dispatch) {
+  const tools = definitions.map((def) =>
+    tool(def.name, def.description, zodShapeFromJsonSchema(def.parameters), async (args) => {
+      const result = await dispatch({ name: def.name, args });
+      return { content: [{ type: "text", text: String(result.output ?? "") }], isError: !result.ok };
+    }, { annotations: { readOnlyHint: false } }),
+  );
+  return createSdkMcpServer({ name: "expotify", version: "1.0.0", tools, alwaysLoad: true });
+}
+
+export function nativeQueryOptions(request, cliPath, env, server) {
+  const base = queryOptions(request, cliPath, env);
+  return {
+    ...base,
+    env: { ...env, ENABLE_TOOL_SEARCH: "false" },
+    maxTurns: Number.isInteger(request.maxTurns) && request.maxTurns > 0 ? request.maxTurns : 4,
+    mcpServers: { expotify: server },
+    allowedTools: ["mcp__expotify__*"],
+  };
+}
+
+/** Pending-call table for the line protocol. `write(line)` sends to Rust; `feed(line)`
+ *  receives from Rust; `close(reason)` fails every pending call (Rust went away). */
+export function createToolBridge(write) {
+  const pending = new Map();
+  let sequence = 0;
+  let closed = null;
+  return {
+    get pendingCount() { return pending.size; },
+    call({ name, args }) {
+      if (closed) return Promise.reject(closed);
+      const id = `call-${++sequence}`;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        write(JSON.stringify({ type: "tool_call", id, name, args }) + "\n");
+      });
+    },
+    feed(line) {
+      let message;
+      try { message = JSON.parse(line); } catch { return false; }
+      if (message?.type !== "tool_result" || typeof message.id !== "string") return false;
+      const waiter = pending.get(message.id);
+      if (!waiter) return false;
+      pending.delete(message.id);
+      waiter.resolve({ ok: message.ok === true, output: typeof message.output === "string" ? message.output : "" });
+      return true;
+    },
+    close(reason = "tool bridge closed") {
+      closed = new Error(reason);
+      for (const waiter of pending.values()) waiter.reject(closed);
+      pending.clear();
+    },
   };
 }
 

@@ -1,5 +1,59 @@
 import { describe, expect, test } from "bun:test";
-import { bootstrapObserver, guardSdkMessage, isClaudeAccount, isolatedEnvironment, normalizeCatalog, queryOptions, redactError } from "./protocol.mjs";
+import { z } from "zod";
+import { bootstrapObserver, buildToolServer, createToolBridge, guardSdkMessage, isClaudeAccount, isolatedEnvironment, nativeQueryOptions, normalizeCatalog, queryOptions, redactError, zodShapeFromJsonSchema } from "./protocol.mjs";
+
+const VOLUME_SCHEMA = { type: "object", properties: { level: { type: "integer", minimum: 0, maximum: 100, description: "Target volume" } }, required: ["level"], additionalProperties: false };
+const PROMPT_SCHEMA = { type: "object", properties: { type: { type: "string", enum: ["insight", "chat"] }, content: { type: "string" }, note: { type: "string" } }, required: ["type", "content"], additionalProperties: false };
+
+describe("native tool bridge", () => {
+  test("registry JSON Schema converts to Zod with the same constraints", () => {
+    const volume = z.object(zodShapeFromJsonSchema(VOLUME_SCHEMA));
+    expect(volume.safeParse({ level: 30 }).success).toBe(true);
+    expect(volume.safeParse({ level: "30" }).success).toBe(false);
+    expect(volume.safeParse({ level: 120 }).success).toBe(false);
+    expect(volume.safeParse({ level: 30.5 }).success).toBe(false);
+    const prompt = z.object(zodShapeFromJsonSchema(PROMPT_SCHEMA));
+    expect(prompt.safeParse({ type: "chat", content: "x" }).success).toBe(true);
+    expect(prompt.safeParse({ type: "lyrics", content: "x" }).success).toBe(false);
+    expect(prompt.safeParse({ type: "chat" }).success).toBe(false);
+    expect(() => zodShapeFromJsonSchema({ type: "object", properties: { x: { type: "array" } } })).toThrow("unsupported");
+  });
+
+  test("tool server only relays calls; results map ok -> isError", async () => {
+    const seen = [];
+    const server = buildToolServer(
+      [{ name: "set_volume", description: "Set volume", parameters: VOLUME_SCHEMA }],
+      async (call) => { seen.push(call); return { ok: call.args.level < 50, output: `level ${call.args.level}` }; },
+    );
+    expect(server.type).toBe("sdk");
+    expect(server.name).toBe("expotify");
+    const options = nativeQueryOptions({ configDir: "/tmp/x", maxTurns: 3 }, "/cli", { HOME: "/h" }, server);
+    expect(options.maxTurns).toBe(3);
+    expect(options.allowedTools).toEqual(["mcp__expotify__*"]);
+    expect(options.env.ENABLE_TOOL_SEARCH).toBe("false");
+    expect(options.tools).toEqual([]);
+    expect(nativeQueryOptions({ configDir: "/tmp/x" }, "/cli", {}, server).maxTurns).toBe(4);
+  });
+
+  test("bridge resolves calls by id and fails pending calls when Rust goes away", async () => {
+    const lines = [];
+    const bridge = createToolBridge((line) => lines.push(line));
+    const first = bridge.call({ name: "set_volume", args: { level: 30 } });
+    const second = bridge.call({ name: "like_current", args: {} });
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { type: "tool_call", id: "call-1", name: "set_volume", args: { level: 30 } },
+      { type: "tool_call", id: "call-2", name: "like_current", args: {} },
+    ]);
+    expect(bridge.feed("not json")).toBe(false);
+    expect(bridge.feed(JSON.stringify({ type: "tool_result", id: "call-9", ok: true, output: "x" }))).toBe(false);
+    expect(bridge.feed(JSON.stringify({ type: "tool_result", id: "call-2", ok: false, output: "Nothing is playing" }))).toBe(true);
+    await expect(second).resolves.toEqual({ ok: false, output: "Nothing is playing" });
+    bridge.close("stdin closed");
+    await expect(first).rejects.toThrow("stdin closed");
+    await expect(bridge.call({ name: "x", args: {} })).rejects.toThrow("stdin closed");
+    expect(bridge.pendingCount).toBe(0);
+  });
+});
 
 const subscription = { loggedIn: true, authMethod: "claude.ai", apiProvider: "firstParty", subscriptionType: "max" };
 

@@ -2,6 +2,7 @@ mod ai;
 mod auth;
 mod claude_runtime;
 mod commands;
+mod faults;
 mod lyrics;
 mod spotify;
 mod storage;
@@ -93,9 +94,46 @@ pub fn run() {
                 settings: Arc::new(RwLock::new(settings)),
                 current_track: Arc::new(RwLock::new(None)),
                 lyrics_fetcher: lyrics::LyricsFetcher::new(),
+                chat_cancel: tokio::sync::Mutex::new(None),
             };
 
             app.manage(state);
+
+            // Debug-only endpoint probe: EXPOTIFY_TOOL_PROBE=openai|anthropic runs the native
+            // tool-calling path once with a dry-run executor and writes the report next to
+            // settings.json. Never compiled into release builds.
+            #[cfg(debug_assertions)]
+            if let Ok(provider) = std::env::var("EXPOTIFY_TOOL_PROBE") {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    let state = handle.state::<commands::AppState>();
+                    let target = match provider.as_str() {
+                        "openai" => Some(ai::models::ModelProvider::Openai),
+                        "anthropic" => Some(ai::models::ModelProvider::Anthropic),
+                        _ => None,
+                    };
+                    // A report left by an earlier run is moved aside first, so the report file
+                    // only appears once this run has finished (poll for it).
+                    let report_path = dirs::config_dir()
+                        .map(|dir| dir.join("expotify").join(format!("tool-probe-{provider}.json")));
+                    if let Some(path) = report_path.as_ref().filter(|path| path.is_file()) {
+                        let _ = std::fs::rename(path, path.with_extension("prev.json"));
+                    }
+                    let report = match target {
+                        Some(target) => commands::run_tool_probe(state.inner(), target).await,
+                        None => Err(format!("EXPOTIFY_TOOL_PROBE must be openai or anthropic, got '{provider}'")),
+                    };
+                    let report = report
+                        .unwrap_or_else(|error| serde_json::json!({"ok": false, "pass": false, "error": error}));
+                    log::info!("[tool-probe] {report}");
+                    if let Some(path) = report_path {
+                        if let Err(error) = std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap_or_default()) {
+                            log::warn!("[tool-probe] could not write {}: {error}", path.display());
+                        }
+                    }
+                });
+            }
 
             #[cfg(debug_assertions)]
             if let Some(main) = app.get_webview_window("main") {
@@ -250,6 +288,8 @@ pub fn run() {
             commands::anthropic_logout,
             // Agent Chat
             commands::agent_chat,
+            commands::agent_chat_cancel,
+            commands::tool_protocol_probe,
             // Model listing
             commands::list_models,
         ])

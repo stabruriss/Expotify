@@ -195,8 +195,13 @@ export async function listModels(force = false): Promise<ProviderCatalog[]> {
 
 // ============ Agent Chat ============
 
-export async function agentChat(messages: ChatMessage[]): Promise<AgentChatResult> {
-  return invoke("agent_chat", { messages });
+export async function agentChat(messages: ChatMessage[], requestId: string): Promise<AgentChatResult> {
+  return invoke("agent_chat", { messages, requestId });
+}
+
+/** Abort that chat request on the backend; already-performed actions stay done. A cancel for a finished or replaced request is ignored. */
+export async function agentChatCancel(requestId: string): Promise<void> {
+  return invoke("agent_chat_cancel", { requestId });
 }
 
 // ============ Lyrics ============

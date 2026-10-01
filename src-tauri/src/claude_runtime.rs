@@ -1,11 +1,12 @@
-use anyhow::{bail, Context, Result};
+use crate::ai::tools::{ToolCall, ToolOutcome};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
-use tokio::sync::{oneshot, Mutex};
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{oneshot, Mutex, MutexGuard};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -19,25 +20,30 @@ pub struct ClaudeRuntime {
     login_cancel: Mutex<Option<oneshot::Sender<()>>>,
 }
 
+/// A shell script standing in for the bundled Claude helper, shared by tests across modules.
 #[cfg(all(test, unix))]
-mod tests {
-    use super::*;
+pub(crate) mod test_support {
+    use super::ClaudeRuntime;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
-    struct Fixture {
-        dir: PathBuf,
-        runtime: Arc<ClaudeRuntime>,
+    pub(crate) struct FakeHelper {
+        pub dir: PathBuf,
+        pub runtime: Arc<ClaudeRuntime>,
     }
-    impl Fixture {
-        fn new(script: &str) -> Self {
+    impl FakeHelper {
+        pub(crate) fn new(script: &str) -> Self {
+            // Scripts that start by reading the request line manage stdin themselves;
+            // the others drain it like the real helper does for single-response actions.
+            let prelude = if script.starts_with("IFS= read") { "" } else { "/bin/cat >/dev/null\n" };
             let dir = std::env::temp_dir()
                 .join(format!("expotify-runtime-test-{}", rand::random::<u64>()));
             std::fs::create_dir(&dir).unwrap();
             let helper = dir.join("helper");
             std::fs::write(
                 &helper,
-                format!("#!/bin/sh\n/bin/cat >/dev/null\n{script}\n"),
+                format!("#!/bin/sh\n{prelude}{script}\n"),
             )
             .unwrap();
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -45,11 +51,19 @@ mod tests {
             Self { dir, runtime }
         }
     }
-    impl Drop for Fixture {
+    impl Drop for FakeHelper {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::test_support::FakeHelper as Fixture;
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn isolated_runtime_uses_system_path_and_private_config() {
@@ -90,10 +104,18 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("timed out"));
-        let pid: i32 = std::fs::read_to_string(fixture.dir.join("config/descendant"))
-            .unwrap()
-            .parse()
-            .unwrap();
+        // A freshly written script can take a moment to start under load; the pid file is
+        // written as soon as it runs.
+        let descendant = fixture.dir.join("config/descendant");
+        let mut recorded = String::new();
+        for _ in 0..500 {
+            recorded = std::fs::read_to_string(&descendant).unwrap_or_default();
+            if !recorded.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let pid: i32 = recorded.trim().parse().expect("the helper must record its child's pid");
         let mut exited = false;
         for _ in 0..100 {
             if unsafe { libc::kill(pid, 0) } == -1 {
@@ -132,6 +154,36 @@ mod tests {
             assert!(result.unwrap_err().to_string().contains("cancelled"));
         }
     }
+
+    #[tokio::test]
+    async fn native_session_relays_tool_calls_and_results() {
+        // Fake helper: read the request line, ask for one tool call, echo the result back.
+        let fixture = Fixture::new(
+            "IFS= read -r request\nprintf '%s\\n' '{\"type\":\"tool_call\",\"id\":\"call-1\",\"name\":\"set_volume\",\"args\":{\"level\":30}}'\nIFS= read -r result\nprintf '{\"ok\":true,\"data\":{\"text\":\"done\",\"echo\":%s}}' \"$result\"",
+        );
+        let mut session = fixture
+            .runtime
+            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(5))
+            .await
+            .unwrap();
+        let call = match session.next().await.unwrap() {
+            HelperEvent::ToolCall(call) => call,
+            HelperEvent::Final(_) => panic!("expected a tool call first"),
+        };
+        assert_eq!(call.name, "set_volume");
+        assert_eq!(call.args["level"], 30);
+        let outcome = ToolOutcome::failed(&call, "test", "Volume set to 30.");
+        session.reply(&outcome).await.unwrap();
+        match session.next().await.unwrap() {
+            HelperEvent::Final(data) => {
+                assert_eq!(data["text"], "done");
+                assert_eq!(data["echo"]["id"], "call-1");
+                assert_eq!(data["echo"]["ok"], false);
+                assert_eq!(data["echo"]["output"], "Volume set to 30.");
+            }
+            HelperEvent::ToolCall(_) => panic!("expected the final response"),
+        }
+    }
 }
 
 // The SDK starts a native child. Terminate the whole group on timeout/cancel,
@@ -143,6 +195,118 @@ impl Drop for ProcessGroup {
         unsafe {
             libc::kill(-(self.0 as i32), libc::SIGKILL);
         }
+    }
+}
+
+fn timeout_message(login: bool) -> &'static str {
+    if login {
+        "Claude sign-in timed out waiting for the browser callback. Retry with your default browser and allow the localhost callback."
+    } else {
+        "Claude request timed out. Please try again."
+    }
+}
+
+/// One line from the helper: either a tool call to execute in Rust, or the final response.
+pub enum HelperEvent {
+    ToolCall(ToolCall),
+    Final(Value),
+}
+
+/// A running helper process. Holds the runtime's operation lock for its lifetime so one
+/// credential-refresh owner exists at a time; dropping it kills the process group.
+pub struct ClaudeSession<'a> {
+    _operation: MutexGuard<'a, ()>,
+    _group: ProcessGroup,
+    child: Child,
+    stdin: Option<ChildStdin>,
+    lines: Lines<BufReader<ChildStdout>>,
+    bytes_read: usize,
+    deadline: Instant,
+    login: bool,
+}
+
+impl ClaudeSession<'_> {
+    fn remaining(&self) -> Result<Duration> {
+        let remaining = self.deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            bail!("{}", timeout_message(self.login));
+        }
+        Ok(remaining)
+    }
+
+    /// Wait for the next event. Blank lines are skipped; the final line ends the process.
+    pub async fn next(&mut self) -> Result<HelperEvent> {
+        loop {
+            let remaining = self.remaining()?;
+            let line = tokio::time::timeout(remaining, self.lines.next_line())
+                .await
+                .map_err(|_| anyhow!(timeout_message(self.login)))??;
+            let Some(line) = line else {
+                let status = tokio::time::timeout(self.remaining()?, self.child.wait())
+                    .await
+                    .map_err(|_| anyhow!(timeout_message(self.login)))??;
+                bail!("Claude runtime exited without a response ({status})");
+            };
+            self.bytes_read += line.len() + 1;
+            if self.bytes_read > 8 * 1024 * 1024 {
+                bail!("Claude runtime response is too large");
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_str(&line)
+                .context("Claude runtime returned an invalid response")?;
+            if value["type"] == "tool_call" {
+                let id = value["id"].as_str().unwrap_or_default();
+                let name = value["name"].as_str().unwrap_or_default();
+                if id.is_empty() || name.is_empty() {
+                    bail!("Claude runtime sent an invalid tool call");
+                }
+                return Ok(HelperEvent::ToolCall(ToolCall {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    args: value["args"].clone(),
+                }));
+            }
+            // Final response: close our side and reap the process.
+            self.stdin.take();
+            let status = tokio::time::timeout(self.remaining()?, self.child.wait())
+                .await
+                .map_err(|_| anyhow!(timeout_message(self.login)))??;
+            if !status.success() || value["ok"] != true {
+                let message = value["error"]
+                    .as_str()
+                    .unwrap_or("Claude runtime failed");
+                if value["code"] == "authentication_required" {
+                    return Err(ClaudeAuthenticationError(message.to_owned()).into());
+                }
+                bail!("{message}");
+            }
+            return Ok(HelperEvent::Final(value["data"].clone()));
+        }
+    }
+
+    /// Send a tool outcome back to the helper (native tool-calling only).
+    pub async fn reply(&mut self, outcome: &ToolOutcome) -> Result<()> {
+        let remaining = self.remaining()?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .context("Claude runtime tool channel is closed")?;
+        let line = serde_json::to_string(&json!({
+            "type": "tool_result",
+            "id": outcome.call_id,
+            "ok": outcome.ok,
+            "output": outcome.output,
+        }))?;
+        tokio::time::timeout(remaining, async {
+            stdin.write_all(line.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await
+        })
+        .await
+        .map_err(|_| anyhow!(timeout_message(self.login)))??;
+        Ok(())
     }
 }
 
@@ -163,16 +327,22 @@ impl ClaudeRuntime {
         })
     }
 
-    pub async fn call(&self, mut request: Value, timeout: Duration) -> Result<Value> {
+    /// Spawn the helper for one request. Non-native requests get their stdin closed right
+    /// away (single response); native tool-calling requests keep it open so tool results
+    /// can be written back. The returned session owns the process: dropping it kills the
+    /// whole process group.
+    pub async fn start(&self, mut request: Value, timeout: Duration) -> Result<ClaudeSession<'_>> {
         let login = request["action"] == "login";
-        let _operation = tokio::time::timeout(timeout, self.operation.lock())
+        let keep_stdin = request["protocol"] == "native";
+        let operation = tokio::time::timeout(timeout, self.operation.lock())
             .await
             .context("Claude runtime is busy. Please try again.")?;
         request["configDir"] = json!(self.config_dir);
-        let payload = serde_json::to_vec(&request)?;
+        let mut payload = serde_json::to_vec(&request)?;
         if payload.len() > 4 * 1024 * 1024 {
             bail!("Claude request is too large");
         }
+        payload.push(b'\n');
         let mut command = Command::new(&self.helper);
         command.env_clear();
         for key in [
@@ -209,43 +379,56 @@ impl ClaudeRuntime {
         let mut child = command
             .spawn()
             .context("Could not start the bundled Claude runtime. Reinstall Expotify.")?;
-        let _group = ProcessGroup(child.id().context("Claude runtime did not start")?);
-        let operation = async move {
-            let mut stdin = child
-                .stdin
-                .take()
-                .context("Claude runtime input unavailable")?;
+        let group = ProcessGroup(child.id().context("Claude runtime did not start")?);
+        let deadline = Instant::now() + timeout;
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("Claude runtime input unavailable")?;
+        tokio::time::timeout(timeout, async {
             stdin.write_all(&payload).await?;
+            stdin.flush().await
+        })
+        .await
+        .map_err(|_| anyhow!(timeout_message(login)))??;
+        let stdin = if keep_stdin {
+            Some(stdin)
+        } else {
             drop(stdin);
-            let mut stdout = child
-                .stdout
-                .take()
-                .context("Claude runtime output unavailable")?
-                .take(8 * 1024 * 1024 + 1);
-            let mut output = Vec::new();
-            stdout.read_to_end(&mut output).await?;
-            if output.len() > 8 * 1024 * 1024 {
-                bail!("Claude runtime response is too large");
-            }
-            let status = child.wait().await?;
-            let response: Value = serde_json::from_slice(&output)
-                .context("Claude runtime returned an invalid response")?;
-            if !status.success() || response["ok"] != true {
-                let message = response["error"]
-                    .as_str()
-                    .unwrap_or("Claude runtime failed");
-                if response["code"] == "authentication_required" {
-                    return Err(ClaudeAuthenticationError(message.to_owned()).into());
-                }
-                bail!("{message}");
-            }
-            Ok(response["data"].clone())
+            None
         };
-        tokio::time::timeout(timeout, operation)
-            .await
-            .context(if login {
-                "Claude sign-in timed out waiting for the browser callback. Retry with your default browser and allow the localhost callback."
-            } else { "Claude request timed out. Please try again." })?
+        let stdout = child
+            .stdout
+            .take()
+            .context("Claude runtime output unavailable")?;
+        Ok(ClaudeSession {
+            _operation: operation,
+            _group: group,
+            child,
+            stdin,
+            lines: BufReader::new(stdout).lines(),
+            bytes_read: 0,
+            deadline,
+            login,
+        })
+    }
+
+    /// Single request / single response. Tool calls are not accepted on this path.
+    pub async fn call(&self, request: Value, timeout: Duration) -> Result<Value> {
+        let mut session = self.start(request, timeout).await?;
+        loop {
+            match session.next().await? {
+                HelperEvent::Final(data) => return Ok(data),
+                HelperEvent::ToolCall(call) => {
+                    let refused = ToolOutcome::failed(
+                        &call,
+                        "tools_unavailable",
+                        "Tool calls are not accepted on this channel.",
+                    );
+                    session.reply(&refused).await?;
+                }
+            }
+        }
     }
 
     pub async fn login(&self) -> Result<()> {

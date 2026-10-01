@@ -1,4 +1,5 @@
 use crate::ai::models::{deserialize_selection, ModelProvider, ModelSelection};
+use crate::ai::tools::ToolProtocolSettings;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -43,6 +44,9 @@ pub struct Settings {
     /// Existing installs keep their selection; a fresh install follows its first connected account.
     #[serde(default = "existing_model_defaults")]
     pub model_defaults_initialized: bool,
+    /// How chat tool calls are obtained from each provider (legacy text JSON or native).
+    #[serde(default)]
+    pub tool_protocol: ToolProtocolSettings,
     /// User memories (preferences, notes saved by AI)
     #[serde(default)]
     pub memories: Vec<String>,
@@ -62,7 +66,30 @@ fn default_chat_prompt() -> String {
 
 pub const DEFAULT_AI_PROMPT: &str = "Briefly introduce this song (under 500 words):\n\nSong: {name}\nArtist: {artist}\nAlbum: {album}\n\nInclude the song's style/genre and creative background. Do not repeat the song title or artist name. Give the introduction directly without preamble. No citation links in the output.\n\nSearch online for interesting stories about the track, the creator, and details about this specific version and performer, and weave them into the introduction.\n\n{memories}\nConsult the user's memories above (if any) for personalized insights. Always reply in the user's language.";
 
+/// Default chat prompt for native tool calling: no JSON convention; tools are real.
 pub const DEFAULT_CHAT_PROMPT: &str = r#"You are the Expotify music assistant and the user's chat companion.
+
+Current playback: {name} - {artist} ({album})
+Current volume: {volume}%
+
+{memories}
+
+You control Spotify through the provided tools (search_and_play, like_current, unlike_current, shuffle_liked, set_volume, save_memory, update_prompt). Call a tool when the user wants an action and reply in plain text otherwise. Never write a tool call as JSON text: only real tool calls are executed, and the tool result tells you what actually happened.
+
+IMPORTANT — Music playback intent:
+When the user's intent is clearly to play music (they mention a song, artist, album, genre, mood, era, or any music-related request), DO NOT ask follow-up questions. Immediately use search_and_play with the best query you can construct from the information given. Only ask for clarification if the request is genuinely too ambiguous to form any search query (e.g. "play something" with zero context).
+
+After a tool result, tell the user what actually happened in one or two sentences; if a tool failed, say so and suggest what to do instead.
+
+You can chat about any topic. Use web search when helpful for factual questions.
+Use save_memory when you learn something about the user's preferences.
+Consult the memories above for user preferences when relevant.
+Always reply in the user's language."#;
+
+/// Earlier shipped defaults (legacy JSON convention). A stored prompt equal to one of
+/// these was never customised by the user and is migrated to `DEFAULT_CHAT_PROMPT`.
+pub const LEGACY_DEFAULT_CHAT_PROMPTS: [&str; 2] = [
+    r#"You are the Expotify music assistant and the user's chat companion.
 
 Current playback: {name} - {artist} ({album})
 Current volume: {volume}%
@@ -89,7 +116,38 @@ When the user's intent is clearly to play music (they mention a song, artist, al
 You can chat about any topic. Use web search when helpful for factual questions.
 Use save_memory when you learn something about the user's preferences.
 Consult the memories above for user preferences when relevant.
-Always reply in the user's language."#;
+Always reply in the user's language."#,
+    r#"You are the Expotify music assistant and the user's chat companion.
+
+Current playback: {name} - {artist} ({album})
+Current volume: {volume}%
+
+{memories}
+
+Available tools (reply with a single JSON object when using a tool):
+- search_and_play(query): Search for a song and play the best match.
+- like_current: Add current song to Liked Songs.
+- unlike_current: Remove current song from Liked Songs.
+- shuffle_liked: Randomly play a song from Liked Songs.
+- set_volume(level): Set volume (0-100).
+- save_memory(content): Save something about the user's preferences or interests.
+- update_prompt(type, content): Update the AI Insight ("insight") or Chat ("chat") prompt.
+
+CRITICAL: When calling a tool, your ENTIRE response must be a single valid JSON object — no extra text, no markdown fences, no explanation before or after the JSON. The system parses your full response as JSON; any non-JSON characters will cause the tool call to fail.
+
+Tool response format:
+{"action": "<tool>", "args": {"<param>": <value>}, "message": "brief explanation"}
+
+For normal conversation, just reply with plain text — no JSON needed.
+
+IMPORTANT — Music playback intent:
+When the user's intent is clearly to play music (they mention a song, artist, album, genre, mood, era, or any music-related request), DO NOT ask follow-up questions. Immediately use search_and_play with the best query you can construct from the information given. Only ask for clarification if the request is genuinely too ambiguous to form any search query (e.g. "play something" with zero context).
+
+You can chat about any topic. Use web search when helpful for factual questions.
+Use save_memory when you learn something about the user's preferences.
+Consult the memories above for user preferences when relevant.
+Always reply in the user's language."#,
+];
 
 impl Default for Settings {
     fn default() -> Self {
@@ -108,12 +166,26 @@ impl Default for Settings {
             chat_prompt: DEFAULT_CHAT_PROMPT.to_string(),
             anthropic_enabled: false,
             model_defaults_initialized: false,
+            tool_protocol: ToolProtocolSettings::default(),
             memories: Vec::new(),
         }
     }
 }
 
 impl Settings {
+    /// A chat prompt that still equals one of the shipped legacy defaults was never edited by
+    /// the user; move it to the current default so native tool calling gets the new wording.
+    /// Customised prompts are left alone (the native path adapts them at request time).
+    pub fn migrate_default_chat_prompt(&mut self) {
+        let current = self.chat_prompt.trim();
+        if LEGACY_DEFAULT_CHAT_PROMPTS
+            .iter()
+            .any(|legacy| legacy.trim() == current)
+        {
+            self.chat_prompt = DEFAULT_CHAT_PROMPT.to_string();
+        }
+    }
+
     pub fn initialize_model_defaults(&mut self, provider: ModelProvider) {
         if !self.model_defaults_initialized {
             self.ai_model = ModelSelection::Default { provider };
@@ -142,10 +214,11 @@ impl Settings {
             let content = std::fs::read_to_string(path)?;
             let raw: serde_json::Value = serde_json::from_str(&content)?;
             let legacy = raw["ai_model"].is_string() || raw["chat_model"].is_string();
-            let settings: Self = serde_json::from_value(raw)?;
+            let mut settings: Self = serde_json::from_value(raw)?;
             if legacy {
                 backup_legacy_settings(path, &content)?;
             }
+            settings.migrate_default_chat_prompt();
             log::info!(
                 "[settings] Loaded from {:?} (memories: {}, chat_prompt len: {})",
                 path,
@@ -219,6 +292,21 @@ mod tests {
         let roundtrip: Settings =
             serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
         assert_eq!(loaded.chat_model, roundtrip.chat_model);
+    }
+
+    #[test]
+    fn unedited_legacy_chat_prompts_migrate_to_the_native_default_but_custom_ones_stay() {
+        for legacy in LEGACY_DEFAULT_CHAT_PROMPTS {
+            let mut settings = Settings::default();
+            settings.chat_prompt = legacy.to_string();
+            settings.migrate_default_chat_prompt();
+            assert_eq!(settings.chat_prompt, DEFAULT_CHAT_PROMPT);
+        }
+        let mut custom = Settings::default();
+        custom.chat_prompt = "You are a DJ.".to_string();
+        custom.migrate_default_chat_prompt();
+        assert_eq!(custom.chat_prompt, "You are a DJ.");
+        assert!(!DEFAULT_CHAT_PROMPT.contains("JSON object"));
     }
 
     #[test]

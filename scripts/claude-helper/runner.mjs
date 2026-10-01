@@ -3,20 +3,42 @@ import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
-import { bootstrapObserver, guardSdkMessage, isClaudeAccount, isolatedEnvironment, normalizeCatalog, queryOptions, redactError, requireClaudeAccount } from "./protocol.mjs";
+import { bootstrapObserver, buildToolServer, createToolBridge, guardSdkMessage, isClaudeAccount, isolatedEnvironment, nativeQueryOptions, normalizeCatalog, queryOptions, redactError, requireClaudeAccount } from "./protocol.mjs";
 
 const cliPath = path.join(path.dirname(process.execPath), "claude");
+const MAX_LINE_BYTES = 4 * 1024 * 1024;
 
-async function readRequest() {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of process.stdin) {
-    size += chunk.length;
-    if (size > 4 * 1024 * 1024) throw new Error("Claude request is too large");
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+// stdin is a line channel: the first line is the request; in native tool-calling mode the
+// Rust side keeps it open and answers tool calls with further lines.
+function createStdinLines() {
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity, terminal: false });
+  const buffered = [];
+  const closeHandlers = [];
+  let handler = null;
+  let closed = false;
+  rl.on("line", (line) => { if (handler) handler(line); else buffered.push(line); });
+  rl.on("close", () => { closed = true; for (const fn of closeHandlers.splice(0)) fn(); });
+  return {
+    next() {
+      return new Promise((resolve, reject) => {
+        if (buffered.length) return resolve(buffered.shift());
+        if (closed) return reject(new Error("Claude request channel closed before a request arrived"));
+        handler = (line) => { handler = null; resolve(line); };
+        closeHandlers.push(() => reject(new Error("Claude request channel closed before a request arrived")));
+      });
+    },
+    onLine(fn) { handler = fn; for (const line of buffered.splice(0)) fn(line); },
+    onClose(fn) { if (closed) fn(); else closeHandlers.push(fn); },
+    close() { rl.close(); },
+  };
+}
+
+async function readRequest(stdin) {
+  const line = await stdin.next();
+  if (line.length > MAX_LINE_BYTES) throw new Error("Claude request is too large");
+  return JSON.parse(line);
 }
 
 function runCli(args, env) {
@@ -148,8 +170,60 @@ async function runPrompt(request, env) {
   return { text: text.trim() };
 }
 
-async function main() {
-  const request = await readRequest();
+// Native tool calling: tools are defined by the Rust registry (request.tools, JSON Schema);
+// every call is relayed to Rust over stdout/stdin and executed there. Plain assistant text
+// is never interpreted as an action on this path.
+async function runNativePrompt(request, env, stdin) {
+  if (typeof request.prompt !== "string" || !request.prompt.trim()) throw new Error("Claude prompt is missing");
+  if (!Array.isArray(request.tools) || request.tools.length === 0) throw new Error("Native tool calling requires tool definitions");
+  requireClaudeAccount(await nativeAccount(env));
+  const bridge = createToolBridge((line) => process.stdout.write(line));
+  stdin.onLine((line) => bridge.feed(line));
+  stdin.onClose(() => bridge.close("Expotify closed the tool channel"));
+  let bridgeFailure = null;
+  const server = buildToolServer(request.tools, async (call) => {
+    try {
+      return await bridge.call(call);
+    } catch (error) {
+      bridgeFailure ??= error;
+      return { ok: false, output: "Tool execution is unavailable; stop and tell the user." };
+    }
+  });
+  const session = query({ prompt: request.prompt, options: nativeQueryOptions(request, cliPath, env, server) });
+  let text = "";
+  let completed = false;
+  let turns = null;
+  let toolUses = 0;
+  try {
+    for await (const message of session) {
+      guardSdkMessage(message);
+      if (bridgeFailure) throw bridgeFailure;
+      if (message.type === "assistant") {
+        if (message.error) throw new Error(`Claude: ${message.error}`);
+        for (const block of message.message?.content ?? []) {
+          if (block.type === "tool_use") toolUses++;
+        }
+      }
+      if (message.type === "result") {
+        turns = Number.isInteger(message.num_turns) ? message.num_turns : null;
+        if (message.subtype !== "success" || message.is_error) {
+          throw new Error(message.errors?.join("; ") || `Claude request failed (${message.subtype})`);
+        }
+        completed = true;
+        if (typeof message.result === "string") text = message.result;
+      }
+    }
+  } finally {
+    session.close();
+    bridge.close("session ended");
+  }
+  if (!completed) throw new Error("Claude returned an incomplete response");
+  if (!text.trim() && toolUses === 0) throw new Error("Claude returned an empty response");
+  return { text: text.trim(), turns, tool_uses: toolUses };
+}
+
+async function main(stdin) {
+  const request = await readRequest(stdin);
   if (request.action === "probe") return sdkProbe();
   const env = isolatedEnvironment(request.configDir);
   await mkdir(path.join(request.configDir, "workspace"), { recursive: true, mode: 0o700 });
@@ -167,14 +241,20 @@ async function main() {
       return { loggedIn: false };
     }
     case "catalog": return catalog(request, env);
-    case "prompt": return runPrompt(request, env);
+    case "prompt": return request.protocol === "native" ? runNativePrompt(request, env, stdin) : runPrompt(request, env);
     default: throw new Error("Unknown Claude runtime action");
   }
 }
 
-main().then(data => {
-  process.stdout.write(`${JSON.stringify({ ok: true, data })}\n`);
+const stdinLines = createStdinLines();
+main(stdinLines).then(data => {
+  finish(`${JSON.stringify({ ok: true, data })}\n`, 0);
 }).catch(error => {
-  process.stdout.write(`${JSON.stringify({ ok: false, error: redactError(error), code: error?.code || "request_failed" })}\n`);
-  process.exitCode = 1;
+  finish(`${JSON.stringify({ ok: false, error: redactError(error), code: error?.code || "request_failed" })}\n`, 1);
 });
+
+// The open stdin line channel would keep the process alive; exit once the final line is flushed.
+function finish(line, code) {
+  stdinLines.close();
+  process.stdout.write(line, () => process.exit(code));
+}

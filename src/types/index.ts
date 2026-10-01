@@ -94,24 +94,12 @@ Current volume: {volume}%
 
 {memories}
 
-Available tools (reply with a single JSON object when using a tool):
-- search_and_play(query): Search for a song and play the best match.
-- like_current: Add current song to Liked Songs.
-- unlike_current: Remove current song from Liked Songs.
-- shuffle_liked: Randomly play a song from Liked Songs.
-- set_volume(level): Set volume (0-100).
-- save_memory(content): Save something about the user's preferences or interests.
-- update_prompt(type, content): Update the AI Insight ("insight") or Chat ("chat") prompt.
-
-CRITICAL: When calling a tool, your ENTIRE response must be a single valid JSON object — no extra text, no markdown fences, no explanation before or after the JSON. The system parses your full response as JSON; any non-JSON characters will cause the tool call to fail.
-
-Tool response format:
-{"action": "<tool>", "args": {"<param>": <value>}, "message": "brief explanation"}
-
-For normal conversation, just reply with plain text — no JSON needed.
+You control Spotify through the provided tools (search_and_play, like_current, unlike_current, shuffle_liked, set_volume, save_memory, update_prompt). Call a tool when the user wants an action and reply in plain text otherwise. Never write a tool call as JSON text: only real tool calls are executed, and the tool result tells you what actually happened.
 
 IMPORTANT — Music playback intent:
 When the user's intent is clearly to play music (they mention a song, artist, album, genre, mood, era, or any music-related request), DO NOT ask follow-up questions. Immediately use search_and_play with the best query you can construct from the information given. Only ask for clarification if the request is genuinely too ambiguous to form any search query (e.g. "play something" with zero context).
+
+After a tool result, tell the user what actually happened in one or two sentences; if a tool failed, say so and suggest what to do instead.
 
 You can chat about any topic. Use web search when helpful for factual questions.
 Use save_memory when you learn something about the user's preferences.
@@ -122,6 +110,8 @@ Always reply in the user's language.`;
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /** Executor outcomes behind an assistant message, so later turns see what really happened. */
+  tool_results?: ToolOutcome[];
 }
 
 export interface AgentResponse {
@@ -130,11 +120,27 @@ export interface AgentResponse {
   args?: Record<string, unknown>;
 }
 
+/** Outcome of one tool call as reported by the Rust executor (the source of truth). */
+export interface ToolOutcome {
+  call_id: string;
+  name: string;
+  ok: boolean;
+  /** Model- and user-readable result text (success description or failure reason). */
+  output: string;
+  error_code?: string;
+  track_name?: string;
+}
+
 export interface AgentChatResult {
   response: AgentResponse;
+  /** True when at least one tool ran and every tool call succeeded (executor truth, never the model's wording). */
   executed: boolean;
+  /** The track now playing because of this request, if any. */
   track_name: string | null;
+  /** Request-level failure (provider error or cancellation) after the listed tool calls ran; per-call failures are in tool_results. */
   error?: string;
+  /** Every tool call made for this request, in execution order. */
+  tool_results: ToolOutcome[];
 }
 
 // Lyrics

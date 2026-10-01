@@ -1,10 +1,14 @@
+use crate::ai::events::{self, EventContext};
 use crate::ai::models::{ModelProvider, ModelSelection, ProviderCatalog};
-use crate::ai::{AgentResponse, AnthropicService, ChatMessage, OpenAIService};
+use crate::ai::tools::{self, ChatCancellation, ToolCall, ToolContext, ToolOutcome, ToolProtocol, ToolRunner};
+use crate::ai::{AgentResponse, AnthropicService, ChatMessage, NativeChatOutcome, OpenAIService};
 use crate::auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use crate::lyrics::{LyricsFetcher, LyricsInfo};
 use crate::spotify::{self, SearchResult, SpotifyDevice, SpotifyWebApi, TrackInfo};
 use crate::storage::Settings;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Manager, State};
 use tokio::sync::RwLock;
 
@@ -60,6 +64,8 @@ pub struct AppState {
     pub settings: Arc<RwLock<Settings>>,
     pub current_track: Arc<RwLock<Option<TrackInfo>>>,
     pub lyrics_fetcher: LyricsFetcher,
+    /// The in-flight chat request (client request id + cancellation handle); one at a time.
+    pub chat_cancel: tokio::sync::Mutex<Option<(String, ChatCancellation)>>,
 }
 
 async fn resolve_connected_model(
@@ -721,26 +727,72 @@ pub async fn spotify_play_track(uri: String) -> Result<(), String> {
 #[derive(serde::Serialize)]
 pub struct AgentChatResult {
     pub response: AgentResponse,
+    /// True only when the executor completed the requested action.
     pub executed: bool,
     pub track_name: Option<String>,
     /// Error message when action execution fails
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Structured outcome of every tool call made for this request, in order.
+    #[serde(default)]
+    pub tool_results: Vec<ToolOutcome>,
 }
 
+/// One chat request. `request_id` is chosen by the client and is what `agent_chat_cancel`
+/// targets, so a late cancel for an earlier request can never abort a newer one.
 #[tauri::command]
 pub async fn agent_chat(
     state: State<'_, AppState>,
+    request_id: String,
     messages: Vec<ChatMessage>,
 ) -> Result<AgentChatResult, String> {
+    let cancellation = ChatCancellation::new();
+    {
+        let mut slot = state.chat_cancel.lock().await;
+        if let Some((_, previous)) = slot.take() {
+            previous.cancel();
+        }
+        *slot = Some((request_id.clone(), cancellation.clone()));
+    }
+    // Cancellation is cooperative: the provider wait is aborted, a tool that is already
+    // running finishes, and the request returns with everything the executor actually did.
+    let result = run_agent_chat(state.inner(), messages, &cancellation).await;
+    let mut slot = state.chat_cancel.lock().await;
+    if slot.as_ref().is_some_and(|(id, _)| *id == request_id) {
+        *slot = None;
+    }
+    result
+}
+
+/// Cancel the chat request with this id: aborts the provider call (and the Claude helper
+/// process) and prevents further tool execution. Actions already performed stay done. A
+/// cancel for a request that already finished or was replaced is ignored.
+#[tauri::command]
+pub async fn agent_chat_cancel(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
+    let mut slot = state.chat_cancel.lock().await;
+    if slot.as_ref().is_some_and(|(id, _)| *id == request_id) {
+        if let Some((_, cancellation)) = slot.take() {
+            cancellation.cancel();
+        }
+    }
+    Ok(())
+}
+
+async fn run_agent_chat(
+    state: &AppState,
+    messages: Vec<ChatMessage>,
+    cancellation: &ChatCancellation,
+) -> Result<AgentChatResult, String> {
+    let started = Instant::now();
     let settings = state.settings.read().await;
     let preferred_model = settings.chat_model.clone();
     let chat_prompt = settings.chat_prompt.clone();
     let web_search = settings.ai_web_search;
     let memories = settings.memories.clone();
+    let protocols = settings.tool_protocol;
     drop(settings);
 
-    let model = resolve_connected_model(state.inner(), &preferred_model).await?;
+    let model = resolve_connected_model(state, &preferred_model).await?;
 
     // Get current track info for context
     let current = state.current_track.read().await;
@@ -761,217 +813,349 @@ pub async fn agent_chat(
         .map_err(|e| e.to_string())?
         .unwrap_or(50);
 
-    let response = if preferred_model.provider() == ModelProvider::Anthropic {
+    let provider = preferred_model.provider();
+    let (provider_name, protocol) = match provider {
+        ModelProvider::Anthropic => ("anthropic", protocols.anthropic),
+        ModelProvider::Openai => ("openai", protocols.openai),
+    };
+    let events = EventContext::new(provider_name, &model, protocol.label());
+    let ctx = ToolContext::new(&state.spotify_webapi, &state.settings, track_id.clone());
+    let mut runner = ToolRunner::new(cancellation.flag.clone()).with_events(events.clone());
+
+    let completed: Result<(u32, AgentResponse), String> = match (provider, protocol) {
+        (ModelProvider::Anthropic, ToolProtocol::Native) => {
+            let service = state.anthropic_service.read().await;
+            let anthropic = service
+                .as_ref()
+                .ok_or("Claude not connected. Please sign in first.")?;
+            anthropic
+                .agent_chat_native(
+                    &messages,
+                    &model,
+                    &chat_prompt,
+                    &track_name,
+                    &artist,
+                    &album,
+                    volume,
+                    &memories,
+                    &ctx,
+                    &mut runner,
+                    cancellation,
+                )
+                .await
+                .map_err(|e| e.to_string())
+                .map(|outcome| (outcome.turns.unwrap_or(1), native_response(outcome, &runner)))
+        }
+        (ModelProvider::Openai, ToolProtocol::Native) => {
+            let service = state.openai_service.read().await;
+            let openai = service
+                .as_ref()
+                .ok_or("ChatGPT not connected. Please connect in Settings.")?;
+            openai
+                .agent_chat_native(
+                    &messages,
+                    &model,
+                    &chat_prompt,
+                    &track_name,
+                    &artist,
+                    &album,
+                    volume,
+                    web_search,
+                    &memories,
+                    &ctx,
+                    &mut runner,
+                    cancellation,
+                )
+                .await
+                .map_err(|e| e.to_string())
+                .map(|outcome| (outcome.turns.unwrap_or(1), native_response(outcome, &runner)))
+        }
+        (_, ToolProtocol::Legacy) => {
+            let response = tokio::select! {
+                response = legacy_chat(
+                    state, provider, &messages, &model, &chat_prompt, &track_name, &artist, &album,
+                    volume, web_search, &memories,
+                ) => response,
+                _ = cancellation.cancelled() => Err(tools::CANCELLED.to_string()),
+            };
+            match response {
+                Ok(response) => {
+                    let mut parse_event = events.event("parse");
+                    parse_event.parse_via = response.parse_via;
+                    parse_event.tool = ToolCall::from_legacy(&response, 0).map(|call| call.name);
+                    events::record(parse_event);
+                    // Legacy text protocol yields at most one action per reply; every branch of the
+                    // executor reports an explicit outcome instead of failing silently.
+                    if let Some(call) = ToolCall::from_legacy(&response, 1) {
+                        runner.run(&ctx, &call).await;
+                    }
+                    Ok((1, response))
+                }
+                Err(error) => Err(error),
+            }
+        }
+    };
+
+    // Whatever happened to the model request, what the executor did is reported and logged
+    // (each `exec` event was already written by the runner when the call finished).
+    let tool_results = runner.outcomes();
+    let cancelled = cancellation.is_cancelled();
+    let mut turn_event = events.event("turn");
+    turn_event.ok = Some(completed.is_ok() && tool_results.iter().all(|outcome| outcome.ok));
+    turn_event.error_code = if cancelled {
+        Some("cancelled".to_string())
+    } else if completed.is_err() {
+        Some("provider_error".to_string())
+    } else if tool_results.iter().any(|outcome| !outcome.ok) {
+        Some("tool_failed".to_string())
+    } else {
+        None
+    };
+    turn_event.turns = completed.as_ref().ok().map(|(turns, _)| *turns);
+    turn_event.duration_ms = Some(started.elapsed().as_millis() as u64);
+    events::record(turn_event);
+
+    match completed {
+        Ok((_, response)) => Ok(finish(response, tool_results, None)),
+        Err(error) => {
+            let error = if cancelled { tools::CANCELLED.to_string() } else { error };
+            if tool_results.is_empty() {
+                return Err(error);
+            }
+            // The model never summarised, but actions ran: hand the UI the outcomes together
+            // with the request-level error instead of hiding them behind a plain failure.
+            let response = AgentResponse {
+                action: tool_results
+                    .last()
+                    .map(|outcome| outcome.name.clone())
+                    .unwrap_or_else(|| "reply".to_string()),
+                message: String::new(),
+                args: serde_json::Value::Null,
+                parse_via: None,
+            };
+            Ok(finish(response, tool_results, Some(error)))
+        }
+    }
+}
+
+/// The legacy text-protocol provider call; the caller races it against cancellation.
+#[allow(clippy::too_many_arguments)]
+async fn legacy_chat(
+    state: &AppState,
+    provider: ModelProvider,
+    messages: &[ChatMessage],
+    model: &str,
+    chat_prompt: &str,
+    track_name: &str,
+    artist: &str,
+    album: &str,
+    volume: u32,
+    web_search: bool,
+    memories: &[String],
+) -> Result<AgentResponse, String> {
+    if provider == ModelProvider::Anthropic {
         let service = state.anthropic_service.read().await;
         let anthropic = service
             .as_ref()
             .ok_or("Claude not connected. Please sign in first.")?;
         anthropic
-            .agent_chat(
-                &messages,
-                &model,
-                &chat_prompt,
-                &track_name,
-                &artist,
-                &album,
-                volume,
-                web_search,
-                &memories,
-            )
+            .agent_chat(messages, model, chat_prompt, track_name, artist, album, volume, web_search, memories)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
     } else {
         let service = state.openai_service.read().await;
         let openai = service
             .as_ref()
             .ok_or("ChatGPT not connected. Please connect in Settings.")?;
         openai
-            .agent_chat(
-                &messages,
-                &model,
-                &chat_prompt,
-                &track_name,
-                &artist,
-                &album,
-                volume,
-                web_search,
-                &memories,
-            )
+            .agent_chat(messages, model, chat_prompt, track_name, artist, album, volume, web_search, memories)
             .await
-            .map_err(|e| e.to_string())?
-    };
-
-    // Execute the action
-    let mut executed = false;
-    let mut result_track_name: Option<String> = None;
-    let mut action_error: Option<String> = None;
-
-    match response.action.as_str() {
-        "search_and_play" => {
-            if let Some(query) = response.args.get("query").and_then(|v| v.as_str()) {
-                // Search via Web API, then play via AppleScript
-                let search_result = {
-                    let webapi = state.spotify_webapi.read().await;
-                    match webapi.as_ref() {
-                        Some(webapi_ref) => Some(webapi_ref.search_tracks(query, 1).await),
-                        None => {
-                            action_error = Some("Spotify not connected for search".to_string());
-                            None
-                        }
-                    }
-                };
-                if let Some(search_result) = search_result {
-                    match search_result {
-                        Ok(results) if !results.is_empty() => {
-                            let track = &results[0];
-                            result_track_name = Some(format!("{} - {}", track.name, track.artist));
-                            let uri = track.uri.clone();
-                            match tokio::task::spawn_blocking(move || {
-                                spotify::applescript::spotify_play_track(&uri)
-                            })
-                            .await
-                            {
-                                Ok(Ok(())) => {
-                                    executed = true;
-                                }
-                                Ok(Err(e)) => {
-                                    log::warn!("AppleScript play failed: {}", e);
-                                    action_error = Some(format!("Failed to play track: {}", e));
-                                }
-                                Err(e) => {
-                                    log::warn!("AppleScript play spawn failed: {}", e);
-                                    action_error = Some(format!("Failed to play track: {}", e));
-                                }
-                            }
-                        }
-                        Ok(_) => {
-                            log::warn!("No search results for: {}", query);
-                            action_error = Some(format!("No search results for: {}", query));
-                        }
-                        Err(e) => {
-                            log::warn!("Search failed: {}", e);
-                            action_error = Some(format!("Search failed: {}", e));
-                        }
-                    }
-                }
-            } else {
-                action_error = Some("Missing search query".to_string());
-            }
-        }
-        "like_current" => {
-            if let Some(tid) = &track_id {
-                let webapi = state.spotify_webapi.read().await;
-                if let Some(webapi) = webapi.as_ref() {
-                    match webapi.like_track(tid).await {
-                        Ok(()) => {
-                            executed = true;
-                        }
-                        Err(e) => log::warn!("Like failed: {}", e),
-                    }
-                }
-            }
-        }
-        "unlike_current" => {
-            if let Some(tid) = &track_id {
-                let webapi = state.spotify_webapi.read().await;
-                if let Some(webapi) = webapi.as_ref() {
-                    match webapi.unlike_track(tid).await {
-                        Ok(()) => {
-                            executed = true;
-                        }
-                        Err(e) => log::warn!("Unlike failed: {}", e),
-                    }
-                }
-            }
-        }
-        "shuffle_liked" => {
-            let shuffle_result = {
-                let webapi = state.spotify_webapi.read().await;
-                if let Some(webapi_ref) = webapi.as_ref() {
-                    Some(webapi_ref.get_random_liked_track().await)
-                } else {
-                    None
-                }
-            };
-            if let Some(Ok(track)) = shuffle_result {
-                result_track_name = Some(format!("{} - {}", track.name, track.artist));
-                let uri = track.uri.clone();
-                match tokio::task::spawn_blocking(move || {
-                    spotify::applescript::spotify_play_track(&uri)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {
-                        executed = true;
-                    }
-                    Ok(Err(e)) => log::warn!("AppleScript play failed: {}", e),
-                    Err(e) => log::warn!("AppleScript spawn failed: {}", e),
-                }
-            } else if let Some(Err(e)) = shuffle_result {
-                log::warn!("Get random liked track failed: {}", e);
-            }
-        }
-        "set_volume" => {
-            if let Some(level) = response.args.get("level").and_then(|v| v.as_u64()) {
-                let vol = level.min(100) as u32;
-                match tokio::task::spawn_blocking(move || {
-                    spotify::applescript::set_spotify_volume(vol)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {
-                        executed = true;
-                    }
-                    Ok(Err(e)) => log::warn!("Set volume failed: {}", e),
-                    Err(e) => log::warn!("Set volume spawn failed: {}", e),
-                }
-            }
-        }
-        "save_memory" => {
-            if let Some(content) = response.args.get("content").and_then(|v| v.as_str()) {
-                let mut settings = state.settings.write().await;
-                settings.memories.push(content.to_string());
-                // Cap at 50 memories
-                if settings.memories.len() > 50 {
-                    settings.memories.remove(0);
-                }
-                if let Err(e) = settings.save() {
-                    log::warn!("Failed to save memory: {}", e);
-                } else {
-                    executed = true;
-                }
-            }
-        }
-        "update_prompt" => {
-            if let (Some(prompt_type), Some(content)) = (
-                response.args.get("type").and_then(|v| v.as_str()),
-                response.args.get("content").and_then(|v| v.as_str()),
-            ) {
-                let mut settings = state.settings.write().await;
-                match prompt_type {
-                    "insight" => settings.ai_prompt = content.to_string(),
-                    "chat" => settings.chat_prompt = content.to_string(),
-                    _ => {
-                        log::warn!("Unknown prompt type: {}", prompt_type);
-                    }
-                }
-                if let Err(e) = settings.save() {
-                    log::warn!("Failed to save updated prompt: {}", e);
-                } else {
-                    executed = true;
-                }
-            }
-        }
-        // ask, refuse, reply — no execution needed
-        _ => {}
+            .map_err(|e| e.to_string())
     }
+}
 
-    Ok(AgentChatResult {
+/// Aggregate the executor's outcomes for the UI. `executed` is true only when at least one
+/// tool ran and every tool call succeeded; `track_name` is the track now playing because of
+/// this request; `error` is a request-level failure (provider error or cancellation), never
+/// a single tool's failure, which stays in `tool_results`.
+fn finish(response: AgentResponse, tool_results: Vec<ToolOutcome>, error: Option<String>) -> AgentChatResult {
+    let executed = !tool_results.is_empty() && tool_results.iter().all(|outcome| outcome.ok);
+    let track_name = tool_results
+        .iter()
+        .rev()
+        .filter(|outcome| outcome.ok)
+        .find_map(|outcome| outcome.track_name.clone());
+    AgentChatResult {
         response,
         executed,
-        track_name: result_track_name,
-        error: action_error,
-    })
+        track_name,
+        error,
+        tool_results,
+    }
+}
+
+/// Shape a native-protocol turn for the UI: the final text (or the last executor output
+/// when the model said nothing) and the last tool name as the action badge.
+fn native_response(outcome: NativeChatOutcome, runner: &ToolRunner) -> AgentResponse {
+    let outcomes = runner.outcomes();
+    let message = if outcome.text.is_empty() {
+        outcomes
+            .last()
+            .map(|result| result.output.clone())
+            .unwrap_or_default()
+    } else {
+        outcome.text
+    };
+    let action = outcomes
+        .last()
+        .map(|result| result.name.clone())
+        .unwrap_or_else(|| "reply".to_string());
+    AgentResponse {
+        action,
+        message,
+        args: serde_json::Value::Null,
+        parse_via: None,
+    }
+}
+
+/// Debug-only: exercise one provider's native tool-calling path end to end with a dry-run
+/// executor (calls are validated and reported, never executed). Verifies endpoint
+/// compatibility before the native protocol is switched on for that provider.
+#[tauri::command]
+pub async fn tool_protocol_probe(
+    state: State<'_, AppState>,
+    provider: String,
+) -> Result<serde_json::Value, String> {
+    if !cfg!(debug_assertions) {
+        return Err("The tool protocol probe is only available in debug builds.".to_string());
+    }
+    let provider = match provider.as_str() {
+        "openai" => ModelProvider::Openai,
+        "anthropic" => ModelProvider::Anthropic,
+        other => return Err(format!("Unknown provider '{other}'")),
+    };
+    run_tool_probe(state.inner(), provider).await
+}
+
+pub async fn run_tool_probe(
+    state: &AppState,
+    provider: ModelProvider,
+) -> Result<serde_json::Value, String> {
+    let started = Instant::now();
+    let provider_name = match provider {
+        ModelProvider::Anthropic => "anthropic",
+        ModelProvider::Openai => "openai",
+    };
+    // Every report, including one for a failure before the model was reached, carries the
+    // run metadata so a poller can tell a real failure from a report that is not there yet.
+    let mut report = serde_json::json!({
+        "run_id": events::new_request_id(),
+        "started_at": chrono::Utc::now().to_rfc3339(),
+        "provider": provider_name,
+        "dry_run": true,
+        "pass_criteria": PROBE_PASS_CRITERIA,
+        "tool_calls": [],
+    });
+    match probe_provider(state, provider).await {
+        Ok(run) => {
+            report["model"] = serde_json::json!(run.model);
+            report["tool_calls"] = serde_json::json!(run.tool_calls);
+            match run.outcome {
+                Ok(outcome) => {
+                    report["ok"] = serde_json::json!(true);
+                    report["turns"] = serde_json::json!(outcome.turns);
+                    report["tool_uses"] = serde_json::json!(outcome.tool_uses);
+                    report["text"] = serde_json::json!(outcome.text);
+                }
+                Err(error) => {
+                    report["ok"] = serde_json::json!(false);
+                    report["error"] = serde_json::json!(error.to_string());
+                }
+            }
+        }
+        Err(error) => {
+            report["ok"] = serde_json::json!(false);
+            report["error"] = serde_json::json!(error);
+        }
+    }
+    report["finished_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+    report["duration_ms"] = serde_json::json!(started.elapsed().as_millis() as u64);
+    report["pass"] = serde_json::json!(probe_passed(&report));
+    Ok(report)
+}
+
+struct ProbeRun {
+    model: String,
+    tool_calls: Vec<serde_json::Value>,
+    outcome: anyhow::Result<NativeChatOutcome>,
+}
+
+async fn probe_provider(state: &AppState, provider: ModelProvider) -> Result<ProbeRun, String> {
+    let chat_prompt = state.settings.read().await.chat_prompt.clone();
+    let selection = ModelSelection::Default { provider };
+    let model = resolve_connected_model(state, &selection).await?;
+    let ctx = ToolContext::new(&state.spotify_webapi, &state.settings, None);
+    let mut runner = ToolRunner::dry_run(Arc::new(AtomicBool::new(false)));
+    let cancellation = ChatCancellation::new();
+    let messages = vec![ChatMessage {
+        role: "user".to_string(),
+        content: "Probe: set the playback volume to 42 using the set_volume tool, then confirm in one short sentence.".to_string(),
+        tool_results: vec![],
+    }];
+    let outcome = match provider {
+        ModelProvider::Anthropic => {
+            let service = state.anthropic_service.read().await;
+            let anthropic = service
+                .as_ref()
+                .ok_or("Claude not connected. Please sign in first.")?;
+            anthropic
+                .agent_chat_native(&messages, &model, &chat_prompt, "Probe Track", "Probe Artist", "Probe Album", 60, &[], &ctx, &mut runner, &cancellation)
+                .await
+        }
+        ModelProvider::Openai => {
+            let service = state.openai_service.read().await;
+            let openai = service
+                .as_ref()
+                .ok_or("ChatGPT not connected. Please connect in Settings.")?;
+            openai
+                .agent_chat_native(&messages, &model, &chat_prompt, "Probe Track", "Probe Artist", "Probe Album", 60, false, &[], &ctx, &mut runner, &cancellation)
+                .await
+        }
+    };
+    // Validated arguments are reported here only (the event log never records arguments).
+    let tool_calls = runner
+        .outcomes()
+        .iter()
+        .map(|outcome| {
+            let args = runner
+                .dry_run_calls()
+                .iter()
+                .find(|call| call.call_id == outcome.call_id)
+                .map(|call| call.args.clone())
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "call_id": outcome.call_id,
+                "name": outcome.name,
+                "ok": outcome.ok,
+                "args": args,
+                "output": outcome.output,
+            })
+        })
+        .collect();
+    Ok(ProbeRun { model, tool_calls, outcome })
+}
+
+const PROBE_PASS_CRITERIA: &str =
+    "ok, exactly one tool call, it is set_volume with ok=true and numeric level 42, non-empty final text";
+
+fn probe_passed(report: &serde_json::Value) -> bool {
+    let calls = report["tool_calls"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    report["ok"] == true
+        && calls.len() == 1
+        && calls[0]["name"] == "set_volume"
+        && calls[0]["ok"] == true
+        && calls[0]["args"]["level"].as_f64() == Some(42.0)
+        && report["text"].as_str().is_some_and(|text| !text.trim().is_empty())
 }
 
 // ============ Lyrics Commands ============
@@ -1064,4 +1248,83 @@ pub async fn list_models(
     };
     let (openai, anthropic) = tokio::join!(openai, anthropic);
     Ok([openai, anthropic].into_iter().flatten().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(name: &str, ok: bool, track: Option<&str>) -> ToolOutcome {
+        ToolOutcome {
+            call_id: format!("{name}-id"),
+            name: name.into(),
+            ok,
+            output: if ok { "done".into() } else { "failed".into() },
+            error_code: (!ok).then(|| "test_failure".to_string()),
+            track_name: track.map(str::to_string),
+        }
+    }
+
+    fn reply() -> AgentResponse {
+        AgentResponse {
+            action: "reply".into(),
+            message: "ok".into(),
+            args: serde_json::Value::Null,
+            parse_via: None,
+        }
+    }
+
+    #[test]
+    fn multi_action_results_are_aggregated_from_every_outcome() {
+        let result = finish(
+            reply(),
+            vec![outcome("set_volume", false, None), outcome("search_and_play", true, Some("Song"))],
+            None,
+        );
+        assert!(!result.executed, "a failed call means not everything was executed");
+        assert_eq!(result.track_name.as_deref(), Some("Song"));
+        assert!(result.error.is_none(), "per-call failures stay in tool_results");
+        assert_eq!(result.tool_results.len(), 2);
+
+        let result = finish(
+            reply(),
+            vec![outcome("search_and_play", true, Some("Song")), outcome("set_volume", true, None)],
+            None,
+        );
+        assert!(result.executed);
+        assert_eq!(result.track_name.as_deref(), Some("Song"), "the track comes from the play call, not the last call");
+
+        let result = finish(reply(), vec![], None);
+        assert!(!result.executed);
+        assert!(result.track_name.is_none());
+    }
+
+    #[test]
+    fn request_level_errors_keep_the_executed_outcomes() {
+        let result = finish(reply(), vec![outcome("like_current", true, None)], Some(tools::CANCELLED.to_string()));
+        assert!(result.executed);
+        assert_eq!(result.error.as_deref(), Some("Cancelled"));
+        assert_eq!(result.tool_results[0].name, "like_current");
+    }
+
+    #[test]
+    fn probe_passes_only_on_exactly_one_correct_set_volume_call() {
+        let mut report = serde_json::json!({
+            "ok": true,
+            "text": "Volume set.",
+            "tool_calls": [{"name": "set_volume", "ok": true, "args": {"level": 42}}],
+        });
+        assert!(probe_passed(&report));
+        report["tool_calls"][0]["args"]["level"] = serde_json::json!(42.0);
+        assert!(probe_passed(&report));
+        report["tool_calls"][0]["args"]["level"] = serde_json::json!("42");
+        assert!(!probe_passed(&report), "a numeric string is not a number");
+        report["tool_calls"][0]["args"]["level"] = serde_json::json!(42);
+        report["tool_calls"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"name": "like_current", "ok": true, "args": {}}));
+        assert!(!probe_passed(&report), "extra tool calls fail the probe");
+        assert!(!probe_passed(&serde_json::json!({"ok": false, "error": "boom", "tool_calls": []})));
+    }
 }
