@@ -572,9 +572,13 @@ impl ToolRunner {
                 Ok(invocation) => {
                     let outcome = execute(ctx, call, invocation).await;
                     // Test hook: hold the request after each executed action so a tester can
-                    // cancel between the actions of one request.
+                    // cancel or send a new request between the actions of one request
+                    // (`tool_delay` = 5 s, `tool_delay=15` = 15 s).
                     if crate::faults::active("tool_delay") {
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let seconds = crate::faults::value("tool_delay")
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .unwrap_or(5);
+                        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
                     }
                     outcome
                 }
