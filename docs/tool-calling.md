@@ -80,6 +80,16 @@ prompt and adds the content after it (the model cannot read the current prompt, 
 additions must go through `append`). Both arguments are optional for the legacy text
 protocol (empty artist, replace).
 
+### Playback confirmation
+
+`spotify_play_track` runs the play command as its own AppleScript step; hiding the Spotify
+window and restoring focus afterwards is a separate, best-effort step whose failure is only
+logged. When the play command still reports an error, the executor reads the player's current
+track: if it is the requested track the outcome is a success that mentions the error;
+otherwise the outcome is `play_failed` and says that playback may have started and the
+current song is unknown, so the model asks instead of asserting the previous song is still
+playing (the request's track focus is unconfirmed either way until a success).
+
 ## "The current song" inside one request
 
 `ToolContext` starts with the track that was playing when the request began and follows the

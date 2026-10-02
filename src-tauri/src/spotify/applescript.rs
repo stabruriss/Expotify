@@ -184,30 +184,47 @@ pub fn spotify_play_track(uri: &str) -> Result<()> {
         anyhow::bail!("Invalid Spotify URI: {}", uri);
     }
 
-    // Play track via AppleScript. `tell application "Spotify"` activates the window,
-    // so we save the frontmost app, play, hide Spotify, and restore focus.
-    let script = format!(
-        r#"
-tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
-end tell
-tell application "Spotify" to play track "{}"
-tell application "System Events"
-    set visible of process "Spotify" to false
-end tell
-tell application frontApp to activate
-"#,
-        uri
-    );
+    // `tell application "Spotify"` brings its window forward, so remember the frontmost app
+    // first and put things back afterwards. Only the play command decides success: the
+    // window handling is cosmetic and slow under UI automation, and it must never turn a
+    // track that is already playing into a reported failure, so it runs as a separate,
+    // best-effort step with its own time budget.
+    let front_app = run_osascript(
+        r#"tell application "System Events" to get name of first application process whose frontmost is true"#,
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+    .filter(|name| !name.is_empty());
 
-    let output = run_osascript(&script)?;
-
+    let output = run_osascript(&format!(r#"tell application "Spotify" to play track "{uri}""#))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Failed to play track: {}", stderr);
     }
 
+    restore_window_state(front_app.as_deref());
     Ok(())
+}
+
+/// Hide the Spotify window again and give focus back to the app that had it. Failures are
+/// logged only: playback has already started.
+fn restore_window_state(front_app: Option<&str>) {
+    let mut script = String::from(
+        "tell application \"System Events\"\n    set visible of process \"Spotify\" to false\nend tell\n",
+    );
+    if let Some(app) = front_app {
+        let escaped = app.replace('\\', "\\\\").replace('"', "\\\"");
+        script.push_str(&format!("tell application \"{escaped}\" to activate\n"));
+    }
+    match run_osascript(&script) {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => log::warn!(
+            "[applescript] window restore after play failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => log::warn!("[applescript] window restore after play failed: {error}"),
+    }
 }
 
 /// Shuffle play the user's liked songs collection

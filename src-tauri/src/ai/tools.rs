@@ -645,6 +645,60 @@ fn merged_prompt(previous: &str, content: &str, mode: &PromptMode) -> String {
     }
 }
 
+/// Start playback of `track` and report what actually happened. The play command can succeed
+/// while the window handling after it fails or times out, so an error is checked against the
+/// player's current track before it is reported; when that check cannot confirm either way,
+/// the outcome says the current song is unknown instead of implying the previous song is
+/// still playing.
+async fn start_playback(ctx: &ToolContext<'_>, call: &ToolCall, track: &SearchResult, prefix: &str) -> ToolOutcome {
+    let label = format!("{} - {}", track.name, track.artist);
+    let uri = track.uri.clone();
+    let error = match tokio::task::spawn_blocking(move || spotify::applescript::spotify_play_track(&uri)).await {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(e.to_string()),
+        Err(e) => Some(e.to_string()),
+    };
+    let Some(error) = error else {
+        ctx.note_playback(Some(&track.id));
+        let mut outcome = ToolOutcome::success(call, format!("{prefix}: {label}"));
+        outcome.track_name = Some(label);
+        return outcome;
+    };
+    log::warn!("[tools] play reported an error, checking the player: {error}");
+    let observed = tokio::task::spawn_blocking(spotify::applescript::get_current_track)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+    match observed {
+        Some(current) if same_track(&current.id, &track.id) => {
+            ctx.note_playback(Some(&track.id));
+            let mut outcome = ToolOutcome::success(
+                call,
+                format!("{prefix}: {label} (playback confirmed; the window handling after it failed: {error})"),
+            );
+            outcome.track_name = Some(label);
+            outcome
+        }
+        _ => {
+            ctx.note_playback(None);
+            ToolOutcome::failure(
+                call,
+                "play_failed",
+                format!(
+                    "Could not confirm playback of \"{label}\": {error}. Playback may still have started, so the current song is unknown now; ask the user what is playing before liking or unliking."
+                ),
+            )
+        }
+    }
+}
+
+/// Spotify track ids compare equal with or without the `spotify:track:` prefix.
+fn same_track(a: &str, b: &str) -> bool {
+    let bare = |id: &str| id.strip_prefix("spotify:track:").unwrap_or(id).to_string();
+    !a.trim().is_empty() && bare(a.trim()) == bare(b.trim())
+}
+
 async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation) -> ToolOutcome {
     match invocation {
         Invocation::SearchAndPlay { query, artist } => {
@@ -690,25 +744,7 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                     return ToolOutcome::failure(call, "search_failed", format!("Spotify search failed: {e}"));
                 }
             };
-            let label = format!("{} - {}", track.name, track.artist);
-            let uri = track.uri.clone();
-            match tokio::task::spawn_blocking(move || spotify::applescript::spotify_play_track(&uri)).await {
-                Ok(Ok(())) => {
-                    ctx.note_playback(Some(&track.id));
-                    let mut outcome = ToolOutcome::success(call, format!("Now playing: {label}"));
-                    outcome.track_name = Some(label);
-                    outcome
-                }
-                Ok(Err(e)) => {
-                    log::warn!("[tools] play failed: {e}");
-                    ctx.note_playback(None);
-                    ToolOutcome::failure(call, "play_failed", format!("Found \"{label}\" but could not start playback: {e}"))
-                }
-                Err(e) => {
-                    ctx.note_playback(None);
-                    ToolOutcome::failure(call, "play_failed", format!("Could not start playback: {e}"))
-                }
-            }
+            start_playback(ctx, call, &track, "Now playing").await
         }
         Invocation::LikeCurrent | Invocation::UnlikeCurrent => {
             let like = matches!(invocation, Invocation::LikeCurrent);
@@ -755,24 +791,7 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                     return ToolOutcome::failure(call, "spotify_request_failed", format!("Could not pick a liked song: {e}"));
                 }
             };
-            let label = format!("{} - {}", track.name, track.artist);
-            let uri = track.uri.clone();
-            match tokio::task::spawn_blocking(move || spotify::applescript::spotify_play_track(&uri)).await {
-                Ok(Ok(())) => {
-                    ctx.note_playback(Some(&track.id));
-                    let mut outcome = ToolOutcome::success(call, format!("Now playing a random liked song: {label}"));
-                    outcome.track_name = Some(label);
-                    outcome
-                }
-                Ok(Err(e)) => {
-                    ctx.note_playback(None);
-                    ToolOutcome::failure(call, "play_failed", format!("Picked \"{label}\" but could not start playback: {e}"))
-                }
-                Err(e) => {
-                    ctx.note_playback(None);
-                    ToolOutcome::failure(call, "play_failed", format!("Could not start playback: {e}"))
-                }
-            }
+            start_playback(ctx, call, &track, "Now playing a random liked song").await
         }
         Invocation::SetVolume { level } => {
             match tokio::task::spawn_blocking(move || spotify::applescript::set_spotify_volume(level)).await {
@@ -1035,6 +1054,14 @@ mod tests {
         assert_eq!(pick_track(&display_only, "Earth, Wind & Fire"), (0, true));
         assert_eq!(pick_track(&display_only, "Earth"), (0, false));
         assert_eq!(pick_track(&display_only, "Fire"), (0, false));
+    }
+
+    #[test]
+    fn track_ids_match_with_or_without_the_uri_prefix() {
+        assert!(same_track("spotify:track:abc", "abc"));
+        assert!(same_track("abc", "spotify:track:abc"));
+        assert!(!same_track("abc", "abd"));
+        assert!(!same_track("", ""));
     }
 
     #[test]
