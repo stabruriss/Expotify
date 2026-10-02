@@ -115,20 +115,28 @@ pub fn run() {
                     };
                     // A report left by an earlier run is moved aside first, so the report file
                     // only appears once this run has finished (poll for it).
-                    let report_path = dirs::config_dir()
-                        .map(|dir| dir.join("expotify").join(format!("tool-probe-{provider}.json")));
+                    let report_path = dirs::config_dir().map(|dir| {
+                        dir.join("expotify")
+                            .join(format!("tool-probe-{provider}.json"))
+                    });
                     if let Some(path) = report_path.as_ref().filter(|path| path.is_file()) {
                         let _ = std::fs::rename(path, path.with_extension("prev.json"));
                     }
                     let report = match target {
                         Some(target) => commands::run_tool_probe(state.inner(), target).await,
-                        None => Err(format!("EXPOTIFY_TOOL_PROBE must be openai or anthropic, got '{provider}'")),
+                        None => Err(format!(
+                            "EXPOTIFY_TOOL_PROBE must be openai or anthropic, got '{provider}'"
+                        )),
                     };
-                    let report = report
-                        .unwrap_or_else(|error| serde_json::json!({"ok": false, "pass": false, "error": error}));
+                    let report = report.unwrap_or_else(
+                        |error| serde_json::json!({"ok": false, "pass": false, "error": error}),
+                    );
                     log::info!("[tool-probe] {report}");
                     if let Some(path) = report_path {
-                        if let Err(error) = std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap_or_default()) {
+                        if let Err(error) = std::fs::write(
+                            &path,
+                            serde_json::to_string_pretty(&report).unwrap_or_default(),
+                        ) {
                             log::warn!("[tool-probe] could not write {}: {error}", path.display());
                         }
                     }

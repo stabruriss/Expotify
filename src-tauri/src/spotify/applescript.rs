@@ -197,7 +197,9 @@ pub fn spotify_play_track(uri: &str) -> Result<()> {
     .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
     .filter(|name| !name.is_empty());
 
-    let output = run_osascript(&format!(r#"tell application "Spotify" to play track "{uri}""#))?;
+    let output = run_osascript(&format!(
+        r#"tell application "Spotify" to play track "{uri}""#
+    ))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Failed to play track: {}", stderr);

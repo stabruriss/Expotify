@@ -79,12 +79,16 @@ pub fn native_system_prompt(rendered: &str) -> String {
     ) {
         if end_start >= start {
             let end = end_start + LEGACY_TOOL_SECTION_END.len();
-            return format!("{}{}{}", &rendered[..start], NATIVE_TOOL_GUIDANCE, &rendered[end..]);
+            return format!(
+                "{}{}{}",
+                &rendered[..start],
+                NATIVE_TOOL_GUIDANCE,
+                &rendered[end..]
+            );
         }
     }
     format!("{}\n\n{}", rendered.trim_end(), NATIVE_TOOL_GUIDANCE)
 }
-
 
 /// Legacy text block that tells the model to answer with a JSON object. Kept so the legacy
 /// protocol (no UI entry; `tool_protocol` in settings.json) still works with the native
@@ -114,7 +118,12 @@ pub fn legacy_system_prompt(rendered: &str) -> String {
     }
     const INTENT_MARKER: &str = "IMPORTANT — Music playback intent:";
     if let Some(index) = rendered.find(INTENT_MARKER) {
-        return format!("{}{}\n\n{}", &rendered[..index], LEGACY_TOOL_SECTION, &rendered[index..]);
+        return format!(
+            "{}{}\n\n{}",
+            &rendered[..index],
+            LEGACY_TOOL_SECTION,
+            &rendered[index..]
+        );
     }
     format!("{}\n\n{}", rendered.trim_end(), LEGACY_TOOL_SECTION)
 }

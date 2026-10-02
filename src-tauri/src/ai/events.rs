@@ -41,7 +41,12 @@ pub struct ToolEvent {
 }
 
 impl ToolEvent {
-    pub fn new(provider: &'static str, model: &str, protocol: &'static str, stage: &'static str) -> Self {
+    pub fn new(
+        provider: &'static str,
+        model: &str,
+        protocol: &'static str,
+        stage: &'static str,
+    ) -> Self {
         Self {
             ts: chrono::Utc::now().to_rfc3339(),
             request_id: None,
@@ -140,10 +145,30 @@ mod tests {
         event.ok = Some(false);
         event.error_code = Some("invalid_argument".into());
         let json = serde_json::to_value(&event).unwrap();
-        let keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        let keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         for key in keys {
             assert!(
-                ["ts", "request_id", "provider", "model", "protocol", "stage", "tool", "call_id", "ok", "error_code", "parse_via", "turns", "duration_ms"].contains(&key),
+                [
+                    "ts",
+                    "request_id",
+                    "provider",
+                    "model",
+                    "protocol",
+                    "stage",
+                    "tool",
+                    "call_id",
+                    "ok",
+                    "error_code",
+                    "parse_via",
+                    "turns",
+                    "duration_ms"
+                ]
+                .contains(&key),
                 "unexpected field {key}"
             );
         }

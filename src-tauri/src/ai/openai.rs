@@ -10,7 +10,10 @@ use std::time::Duration;
 use super::cache::TrackInfoCache;
 use super::models::{CatalogCache, ModelInfo, ModelProvider, ModelSelection, ProviderCatalog};
 use super::tools::{self, ChatCancellation, ToolCall, ToolContext, ToolRunner};
-use super::{legacy_system_prompt, native_system_prompt, render_chat_prompt, AgentResponse, ChatMessage, NativeChatOutcome};
+use super::{
+    legacy_system_prompt, native_system_prompt, render_chat_prompt, AgentResponse, ChatMessage,
+    NativeChatOutcome,
+};
 use crate::auth::OpenAIAuth;
 use crate::spotify::TrackInfo;
 use serde_json::json;
@@ -433,7 +436,12 @@ fn native_tools(web_search: bool) -> Vec<Value> {
     list
 }
 
-fn native_request(model: &str, instructions: &str, input: &[Value], tool_definitions: &[Value]) -> Value {
+fn native_request(
+    model: &str,
+    instructions: &str,
+    input: &[Value],
+    tool_definitions: &[Value],
+) -> Value {
     json!({
         "model": model,
         "instructions": instructions,
@@ -457,7 +465,10 @@ fn history_items(messages: &[ChatMessage]) -> Vec<Value> {
                 content.push('\n');
                 for result in &message.tool_results {
                     let status = if result.ok { "ok" } else { "failed" };
-                    content.push_str(&format!("[tool {} → {status}: {}]\n", result.name, result.output));
+                    content.push_str(&format!(
+                        "[tool {} → {status}: {}]\n",
+                        result.name, result.output
+                    ));
                 }
             }
             json!({ "type": "message", "role": message.role, "content": content })
@@ -498,7 +509,10 @@ fn parse_native_sse(body: &str) -> Result<NativeTurn> {
     let mut argument_snapshots: BTreeMap<u64, String> = BTreeMap::new();
     let mut completed_output: Option<Vec<Value>> = None;
     for event in parse_sse_events(body)? {
-        let index = event.get("output_index").and_then(Value::as_u64).unwrap_or(0);
+        let index = event
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         match event.get("type").and_then(Value::as_str) {
             Some("error" | "response.failed" | "response.incomplete") => {
                 return Err(stream_failure(&event));
@@ -785,12 +799,19 @@ mod tests {
         let turn = parse_native_sse(&body).unwrap();
         assert_eq!(
             turn.function_calls,
-            vec![FunctionCallItem { call_id: "call_1".into(), name: "set_volume".into(), arguments: "{\"level\":30}".into() }]
+            vec![FunctionCallItem {
+                call_id: "call_1".into(),
+                name: "set_volume".into(),
+                arguments: "{\"level\":30}".into()
+            }]
         );
         assert_eq!(turn.output_items.len(), 2);
         assert_eq!(turn.output_items[0]["encrypted_content"], "enc");
         assert_eq!(turn.text, "");
-        assert_eq!(parse_arguments(&turn.function_calls[0].arguments), json!({"level": 30}));
+        assert_eq!(
+            parse_arguments(&turn.function_calls[0].arguments),
+            json!({"level": 30})
+        );
     }
 
     #[test]
@@ -802,8 +823,14 @@ mod tests {
         ]);
         let turn = parse_native_sse(&body).unwrap();
         assert_eq!(turn.function_calls.len(), 2);
-        assert_eq!(parse_arguments(&turn.function_calls[0].arguments), json!({}));
-        assert_eq!(parse_arguments(&turn.function_calls[1].arguments), json!({"level": 55}));
+        assert_eq!(
+            parse_arguments(&turn.function_calls[0].arguments),
+            json!({})
+        );
+        assert_eq!(
+            parse_arguments(&turn.function_calls[1].arguments),
+            json!({"level": 55})
+        );
         assert_eq!(turn.output_items[1]["arguments"], "{\"level\":55}");
     }
 
@@ -821,26 +848,48 @@ mod tests {
         assert!(turn.function_calls.is_empty());
         assert_eq!(turn.text, "Released in 1905.");
         assert!(turn.used_web_search);
-        let text_only = sse_body(&[json!({"type":"response.output_text.delta","delta":"hi"})]) + "data:[DONE]\n\n";
+        let text_only = sse_body(&[json!({"type":"response.output_text.delta","delta":"hi"})])
+            + "data:[DONE]\n\n";
         assert_eq!(parse_native_sse(&text_only).unwrap().text, "hi");
     }
 
     #[test]
     fn native_turn_errors_and_malformed_calls_are_rejected() {
-        let failed = sse_body(&[json!({"type":"response.failed","response":{"error":{"code":"test_error","message":"nope"}}})]);
-        assert!(parse_native_sse(&failed).unwrap_err().to_string().contains("test_error"));
-        let malformed = sse_body(&[json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"","name":"set_volume","arguments":"{}"}})]);
-        assert!(parse_native_sse(&malformed).unwrap_err().to_string().contains("malformed"));
-        assert_eq!(parse_arguments("not json"), Value::String("not json".into()));
+        let failed = sse_body(&[
+            json!({"type":"response.failed","response":{"error":{"code":"test_error","message":"nope"}}}),
+        ]);
+        assert!(parse_native_sse(&failed)
+            .unwrap_err()
+            .to_string()
+            .contains("test_error"));
+        let malformed = sse_body(&[
+            json!({"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"","name":"set_volume","arguments":"{}"}}),
+        ]);
+        assert!(parse_native_sse(&malformed)
+            .unwrap_err()
+            .to_string()
+            .contains("malformed"));
+        assert_eq!(
+            parse_arguments("not json"),
+            Value::String("not json".into())
+        );
     }
 
     #[test]
     fn native_request_declares_strict_function_tools_and_carries_reasoning() {
         let tools = native_tools(true);
         assert_eq!(tools.len(), 8);
-        assert!(tools.iter().filter(|t| t["type"] == "function").all(|t| t["strict"] == true && t["parameters"]["additionalProperties"] == false));
+        assert!(tools
+            .iter()
+            .filter(|t| t["type"] == "function")
+            .all(|t| t["strict"] == true && t["parameters"]["additionalProperties"] == false));
         assert_eq!(tools.last().unwrap()["type"], "web_search");
-        let request = native_request("gpt-test", "sys", &[json!({"type":"message","role":"user","content":"hi"})], &tools);
+        let request = native_request(
+            "gpt-test",
+            "sys",
+            &[json!({"type":"message","role":"user","content":"hi"})],
+            &tools,
+        );
         assert_eq!(request["tool_choice"], "auto");
         assert_eq!(request["parallel_tool_calls"], false);
         assert_eq!(request["store"], false);
@@ -851,16 +900,30 @@ mod tests {
     #[test]
     fn history_items_render_executor_results_into_assistant_messages() {
         let items = history_items(&[
-            ChatMessage { role: "user".into(), content: "音量30".into(), tool_results: vec![] },
+            ChatMessage {
+                role: "user".into(),
+                content: "音量30".into(),
+                tool_results: vec![],
+            },
             ChatMessage {
                 role: "assistant".into(),
                 content: "好的".into(),
-                tool_results: vec![ToolOutcome { call_id: "c".into(), name: "set_volume".into(), ok: false, output: "Could not change the volume".into(), error_code: Some("volume_failed".into()), track_name: None }],
+                tool_results: vec![ToolOutcome {
+                    call_id: "c".into(),
+                    name: "set_volume".into(),
+                    ok: false,
+                    output: "Could not change the volume".into(),
+                    error_code: Some("volume_failed".into()),
+                    track_name: None,
+                }],
             },
         ]);
         assert_eq!(items[0]["role"], "user");
         assert_eq!(items[0]["content"], "音量30");
-        assert!(items[1]["content"].as_str().unwrap().contains("[tool set_volume → failed: Could not change the volume]"));
+        assert!(items[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[tool set_volume → failed: Could not change the volume]"));
     }
 
     fn sse_body(events: &[Value]) -> String {

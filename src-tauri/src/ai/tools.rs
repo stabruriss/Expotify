@@ -234,13 +234,24 @@ pub enum PromptMode {
 /// A validated, typed invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Invocation {
-    SearchAndPlay { query: String, artist: String },
+    SearchAndPlay {
+        query: String,
+        artist: String,
+    },
     LikeCurrent,
     UnlikeCurrent,
     ShuffleLiked,
-    SetVolume { level: u32 },
-    SaveMemory { content: String },
-    UpdatePrompt { kind: PromptKind, content: String, mode: PromptMode },
+    SetVolume {
+        level: u32,
+    },
+    SaveMemory {
+        content: String,
+    },
+    UpdatePrompt {
+        kind: PromptKind,
+        content: String,
+        mode: PromptMode,
+    },
 }
 
 impl Invocation {
@@ -324,13 +335,11 @@ pub fn validate(call: &ToolCall) -> Result<Invocation, ToolError> {
         SHUFFLE_LIKED => Ok(Invocation::ShuffleLiked),
         SET_VOLUME => {
             let level = match args.get("level") {
-                Some(Value::Number(n)) => n
-                    .as_u64()
-                    .or_else(|| {
-                        n.as_f64()
-                            .filter(|f| f.fract() == 0.0 && *f >= 0.0)
-                            .map(|f| f as u64)
-                    }),
+                Some(Value::Number(n)) => n.as_u64().or_else(|| {
+                    n.as_f64()
+                        .filter(|f| f.fract() == 0.0 && *f >= 0.0)
+                        .map(|f| f as u64)
+                }),
                 Some(_) => None,
                 None => {
                     return Err(ToolError::new("missing_argument", "`level` is required"));
@@ -544,7 +553,11 @@ impl ToolRunner {
             return previous.clone();
         }
         let outcome = if self.cancelled.load(Ordering::SeqCst) {
-            ToolOutcome::failure(call, "cancelled", "The request was cancelled before this action ran.")
+            ToolOutcome::failure(
+                call,
+                "cancelled",
+                "The request was cancelled before this action ran.",
+            )
         } else {
             match validate(call) {
                 Ok(_) if self.dry_run => {
@@ -555,7 +568,10 @@ impl ToolRunner {
                     });
                     ToolOutcome::success(
                         call,
-                        format!("dry-run: {} accepted with {} (not executed)", call.name, call.args),
+                        format!(
+                            "dry-run: {} accepted with {} (not executed)",
+                            call.name, call.args
+                        ),
                     )
                 }
                 Ok(_) if crate::faults::active("tool_exec_fail") => ToolOutcome::failure(
@@ -567,7 +583,11 @@ impl ToolRunner {
                     if invocation.uses_spotify_web_api()
                         && crate::faults::active("spotify_not_connected") =>
                 {
-                    ToolOutcome::failure(call, "spotify_not_connected", "Spotify is not connected. Connect it in Settings.")
+                    ToolOutcome::failure(
+                        call,
+                        "spotify_not_connected",
+                        "Spotify is not connected. Connect it in Settings.",
+                    )
                 }
                 Ok(invocation) => {
                     let outcome = execute(ctx, call, invocation).await;
@@ -601,7 +621,10 @@ impl ToolRunner {
 
 /// Case- and whitespace-insensitive artist name, for exact comparison.
 fn normalized_artist(name: &str) -> String {
-    name.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 /// Index of the first result credited to exactly `artist` (one of the result's credited
@@ -620,7 +643,10 @@ fn pick_track(results: &[SearchResult], artist: &str) -> (usize, bool) {
         if result.artist_names.is_empty() {
             normalized_artist(&result.artist) == wanted
         } else {
-            result.artist_names.iter().any(|name| normalized_artist(name) == wanted)
+            result
+                .artist_names
+                .iter()
+                .any(|name| normalized_artist(name) == wanted)
         }
     });
     match found {
@@ -650,14 +676,22 @@ fn merged_prompt(previous: &str, content: &str, mode: &PromptMode) -> String {
 /// player's current track before it is reported; when that check cannot confirm either way,
 /// the outcome says the current song is unknown instead of implying the previous song is
 /// still playing.
-async fn start_playback(ctx: &ToolContext<'_>, call: &ToolCall, track: &SearchResult, prefix: &str) -> ToolOutcome {
+async fn start_playback(
+    ctx: &ToolContext<'_>,
+    call: &ToolCall,
+    track: &SearchResult,
+    prefix: &str,
+) -> ToolOutcome {
     let label = format!("{} - {}", track.name, track.artist);
     let uri = track.uri.clone();
-    let error = match tokio::task::spawn_blocking(move || spotify::applescript::spotify_play_track(&uri)).await {
-        Ok(Ok(())) => None,
-        Ok(Err(e)) => Some(e.to_string()),
-        Err(e) => Some(e.to_string()),
-    };
+    let error =
+        match tokio::task::spawn_blocking(move || spotify::applescript::spotify_play_track(&uri))
+            .await
+        {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e.to_string()),
+            Err(e) => Some(e.to_string()),
+        };
     let Some(error) = error else {
         ctx.note_playback(Some(&track.id));
         let mut outcome = ToolOutcome::success(call, format!("{prefix}: {label}"));
@@ -709,7 +743,11 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
             let results = {
                 let webapi = ctx.spotify_webapi.read().await;
                 let Some(webapi) = webapi.as_ref() else {
-                    return ToolOutcome::failure(call, "spotify_not_connected", "Spotify is not connected. Connect it in Settings.");
+                    return ToolOutcome::failure(
+                        call,
+                        "spotify_not_connected",
+                        "Spotify is not connected. Connect it in Settings.",
+                    );
                 };
                 webapi.search_tracks(&query, limit).await
             };
@@ -736,12 +774,20 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                 }
                 Ok(_) => {
                     ctx.note_playback(None);
-                    return ToolOutcome::failure(call, "no_results", format!("No Spotify results for \"{query}\"."));
+                    return ToolOutcome::failure(
+                        call,
+                        "no_results",
+                        format!("No Spotify results for \"{query}\"."),
+                    );
                 }
                 Err(e) => {
                     log::warn!("[tools] search failed: {e}");
                     ctx.note_playback(None);
-                    return ToolOutcome::failure(call, "search_failed", format!("Spotify search failed: {e}"));
+                    return ToolOutcome::failure(
+                        call,
+                        "search_failed",
+                        format!("Spotify search failed: {e}"),
+                    );
                 }
             };
             start_playback(ctx, call, &track, "Now playing").await
@@ -751,7 +797,11 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
             let track_id = match ctx.track_focus() {
                 TrackFocus::Playing(id) => id,
                 TrackFocus::NothingPlaying => {
-                    return ToolOutcome::failure(call, "nothing_playing", "Nothing is playing right now.");
+                    return ToolOutcome::failure(
+                        call,
+                        "nothing_playing",
+                        "Nothing is playing right now.",
+                    );
                 }
                 TrackFocus::Unconfirmed => {
                     return ToolOutcome::failure(
@@ -763,15 +813,29 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
             };
             let webapi = ctx.spotify_webapi.read().await;
             let Some(webapi) = webapi.as_ref() else {
-                return ToolOutcome::failure(call, "spotify_not_connected", "Spotify is not connected. Connect it in Settings.");
+                return ToolOutcome::failure(
+                    call,
+                    "spotify_not_connected",
+                    "Spotify is not connected. Connect it in Settings.",
+                );
             };
-            let result = if like { webapi.like_track(&track_id).await } else { webapi.unlike_track(&track_id).await };
+            let result = if like {
+                webapi.like_track(&track_id).await
+            } else {
+                webapi.unlike_track(&track_id).await
+            };
             match result {
-                Ok(()) if like => ToolOutcome::success(call, "Added the current song to Liked Songs."),
+                Ok(()) if like => {
+                    ToolOutcome::success(call, "Added the current song to Liked Songs.")
+                }
                 Ok(()) => ToolOutcome::success(call, "Removed the current song from Liked Songs."),
                 Err(e) => {
                     log::warn!("[tools] like/unlike failed: {e}");
-                    ToolOutcome::failure(call, "spotify_request_failed", format!("Spotify rejected the request: {e}"))
+                    ToolOutcome::failure(
+                        call,
+                        "spotify_request_failed",
+                        format!("Spotify rejected the request: {e}"),
+                    )
                 }
             }
         }
@@ -779,7 +843,11 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
             let picked = {
                 let webapi = ctx.spotify_webapi.read().await;
                 let Some(webapi) = webapi.as_ref() else {
-                    return ToolOutcome::failure(call, "spotify_not_connected", "Spotify is not connected. Connect it in Settings.");
+                    return ToolOutcome::failure(
+                        call,
+                        "spotify_not_connected",
+                        "Spotify is not connected. Connect it in Settings.",
+                    );
                 };
                 webapi.get_random_liked_track().await
             };
@@ -788,19 +856,35 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                 Err(e) => {
                     log::warn!("[tools] random liked track failed: {e}");
                     ctx.note_playback(None);
-                    return ToolOutcome::failure(call, "spotify_request_failed", format!("Could not pick a liked song: {e}"));
+                    return ToolOutcome::failure(
+                        call,
+                        "spotify_request_failed",
+                        format!("Could not pick a liked song: {e}"),
+                    );
                 }
             };
             start_playback(ctx, call, &track, "Now playing a random liked song").await
         }
         Invocation::SetVolume { level } => {
-            match tokio::task::spawn_blocking(move || spotify::applescript::set_spotify_volume(level)).await {
+            match tokio::task::spawn_blocking(move || {
+                spotify::applescript::set_spotify_volume(level)
+            })
+            .await
+            {
                 Ok(Ok(())) => ToolOutcome::success(call, format!("Volume set to {level}.")),
                 Ok(Err(e)) => {
                     log::warn!("[tools] set volume failed: {e}");
-                    ToolOutcome::failure(call, "volume_failed", format!("Could not change the volume: {e}"))
+                    ToolOutcome::failure(
+                        call,
+                        "volume_failed",
+                        format!("Could not change the volume: {e}"),
+                    )
                 }
-                Err(e) => ToolOutcome::failure(call, "volume_failed", format!("Could not change the volume: {e}")),
+                Err(e) => ToolOutcome::failure(
+                    call,
+                    "volume_failed",
+                    format!("Could not change the volume: {e}"),
+                ),
             }
         }
         Invocation::SaveMemory { content } => {
@@ -814,11 +898,19 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                 Err(e) => {
                     settings.memories.pop();
                     log::warn!("[tools] save memory failed: {e}");
-                    ToolOutcome::failure(call, "settings_write_failed", format!("Could not save the memory: {e}"))
+                    ToolOutcome::failure(
+                        call,
+                        "settings_write_failed",
+                        format!("Could not save the memory: {e}"),
+                    )
                 }
             }
         }
-        Invocation::UpdatePrompt { kind, content, mode } => {
+        Invocation::UpdatePrompt {
+            kind,
+            content,
+            mode,
+        } => {
             let mut settings = ctx.settings.write().await;
             let (slot, label) = match kind {
                 PromptKind::Insight => (&mut settings.ai_prompt, "insight"),
@@ -831,7 +923,9 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                     call,
                     match mode {
                         PromptMode::Replace => format!("Replaced the {label} prompt."),
-                        PromptMode::Append => format!("Appended to the {label} prompt; the earlier text is kept."),
+                        PromptMode::Append => {
+                            format!("Appended to the {label} prompt; the earlier text is kept.")
+                        }
                     },
                 ),
                 Err(e) => {
@@ -840,7 +934,11 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                         PromptKind::Chat => settings.chat_prompt = previous,
                     }
                     log::warn!("[tools] update prompt failed: {e}");
-                    ToolOutcome::failure(call, "settings_write_failed", format!("Could not save the {label} prompt: {e}"))
+                    ToolOutcome::failure(
+                        call,
+                        "settings_write_failed",
+                        format!("Could not save the {label} prompt: {e}"),
+                    )
                 }
             }
         }
@@ -875,39 +973,109 @@ mod tests {
                 .map(|v| v.as_str().unwrap())
                 .collect();
             for key in properties.keys() {
-                assert!(required.contains(&key.as_str()), "{} must require {key}", def.name);
+                assert!(
+                    required.contains(&key.as_str()),
+                    "{} must require {key}",
+                    def.name
+                );
             }
         }
     }
 
     #[test]
     fn volume_accepts_integers_and_integral_floats_but_not_strings() {
-        assert_eq!(validate(&call(SET_VOLUME, json!({"level": 30}))).unwrap(), Invocation::SetVolume { level: 30 });
-        assert_eq!(validate(&call(SET_VOLUME, json!({"level": 50.0}))).unwrap(), Invocation::SetVolume { level: 50 });
-        assert_eq!(validate(&call(SET_VOLUME, json!({"level": "30"}))).unwrap_err().code, "invalid_argument");
-        assert_eq!(validate(&call(SET_VOLUME, json!({"level": 120}))).unwrap_err().code, "invalid_argument");
-        assert_eq!(validate(&call(SET_VOLUME, json!({"level": 30.5}))).unwrap_err().code, "invalid_argument");
-        assert_eq!(validate(&call(SET_VOLUME, json!({}))).unwrap_err().code, "missing_argument");
+        assert_eq!(
+            validate(&call(SET_VOLUME, json!({"level": 30}))).unwrap(),
+            Invocation::SetVolume { level: 30 }
+        );
+        assert_eq!(
+            validate(&call(SET_VOLUME, json!({"level": 50.0}))).unwrap(),
+            Invocation::SetVolume { level: 50 }
+        );
+        assert_eq!(
+            validate(&call(SET_VOLUME, json!({"level": "30"})))
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            validate(&call(SET_VOLUME, json!({"level": 120})))
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            validate(&call(SET_VOLUME, json!({"level": 30.5})))
+                .unwrap_err()
+                .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            validate(&call(SET_VOLUME, json!({}))).unwrap_err().code,
+            "missing_argument"
+        );
     }
 
     #[test]
     fn string_arguments_and_prompt_kind_are_checked() {
-        assert_eq!(validate(&call(SEARCH_AND_PLAY, json!({"query": "  "}))).unwrap_err().code, "invalid_argument");
-        assert_eq!(validate(&call(SEARCH_AND_PLAY, Value::Null)).unwrap_err().code, "missing_argument");
-        assert_eq!(validate(&call(UPDATE_PROMPT, json!({"type": "lyrics", "content": "x"}))).unwrap_err().code, "invalid_argument");
         assert_eq!(
-            validate(&call(UPDATE_PROMPT, json!({"type": "chat", "content": "Be brief."}))).unwrap(),
-            Invocation::UpdatePrompt { kind: PromptKind::Chat, content: "Be brief.".into(), mode: PromptMode::Replace }
+            validate(&call(SEARCH_AND_PLAY, json!({"query": "  "})))
+                .unwrap_err()
+                .code,
+            "invalid_argument"
         );
-        assert_eq!(validate(&call("play", json!({}))).unwrap_err().code, "unknown_tool");
-        assert_eq!(validate(&call(LIKE_CURRENT, json!([]))).unwrap_err().code, "invalid_argument");
+        assert_eq!(
+            validate(&call(SEARCH_AND_PLAY, Value::Null))
+                .unwrap_err()
+                .code,
+            "missing_argument"
+        );
+        assert_eq!(
+            validate(&call(
+                UPDATE_PROMPT,
+                json!({"type": "lyrics", "content": "x"})
+            ))
+            .unwrap_err()
+            .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            validate(&call(
+                UPDATE_PROMPT,
+                json!({"type": "chat", "content": "Be brief."})
+            ))
+            .unwrap(),
+            Invocation::UpdatePrompt {
+                kind: PromptKind::Chat,
+                content: "Be brief.".into(),
+                mode: PromptMode::Replace
+            }
+        );
+        assert_eq!(
+            validate(&call("play", json!({}))).unwrap_err().code,
+            "unknown_tool"
+        );
+        assert_eq!(
+            validate(&call(LIKE_CURRENT, json!([]))).unwrap_err().code,
+            "invalid_argument"
+        );
     }
 
     #[test]
     fn legacy_conversational_actions_do_not_become_calls_but_unknown_actions_do() {
-        let reply = AgentResponse { action: "reply".into(), message: "hi".into(), args: Value::Null, parse_via: None };
+        let reply = AgentResponse {
+            action: "reply".into(),
+            message: "hi".into(),
+            args: Value::Null,
+            parse_via: None,
+        };
         assert!(ToolCall::from_legacy(&reply, 1).is_none());
-        let unknown = AgentResponse { action: "play".into(), message: "..".into(), args: json!({"q": 1}), parse_via: None };
+        let unknown = AgentResponse {
+            action: "play".into(),
+            message: "..".into(),
+            args: json!({"q": 1}),
+            parse_via: None,
+        };
         let call = ToolCall::from_legacy(&unknown, 2).unwrap();
         assert_eq!(call.name, "play");
         assert_eq!(call.id, "legacy-2");
@@ -929,7 +1097,16 @@ mod tests {
         assert_eq!(again, like);
         assert_eq!(runner.outcomes().len(), 1);
 
-        let unknown = runner.run(&ctx, &ToolCall { id: "c2".into(), name: "dance".into(), args: Value::Null }).await;
+        let unknown = runner
+            .run(
+                &ctx,
+                &ToolCall {
+                    id: "c2".into(),
+                    name: "dance".into(),
+                    args: Value::Null,
+                },
+            )
+            .await;
         assert_eq!(unknown.error_code.as_deref(), Some("unknown_tool"));
         assert_eq!(runner.outcomes().len(), 2);
     }
@@ -941,7 +1118,9 @@ mod tests {
         let ctx = ToolContext::new(&webapi, &settings, Some("t".into()));
         let cancelled = Arc::new(AtomicBool::new(true));
         let mut runner = ToolRunner::new(cancelled);
-        let outcome = runner.run(&ctx, &call(SEARCH_AND_PLAY, json!({"query": "x"}))).await;
+        let outcome = runner
+            .run(&ctx, &call(SEARCH_AND_PLAY, json!({"query": "x"})))
+            .await;
         assert_eq!(outcome.error_code.as_deref(), Some("cancelled"));
     }
 
@@ -949,9 +1128,12 @@ mod tests {
     async fn cancellation_wait_resolves_even_when_cancel_came_first() {
         let cancellation = ChatCancellation::new();
         cancellation.cancel();
-        tokio::time::timeout(std::time::Duration::from_millis(100), cancellation.cancelled())
-            .await
-            .expect("an already-cancelled request must not block");
+        tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            cancellation.cancelled(),
+        )
+        .await
+        .expect("an already-cancelled request must not block");
 
         let pending = ChatCancellation::new();
         let canceller = pending.clone();
@@ -971,15 +1153,28 @@ mod tests {
         let spotify = RwLock::new(None);
         let ctx = ToolContext::new(&spotify, &settings, None);
         let mut runner = ToolRunner::dry_run(Arc::new(AtomicBool::new(false)));
-        let accepted = runner.run(&ctx, &call(SET_VOLUME, json!({"level": 42}))).await;
+        let accepted = runner
+            .run(&ctx, &call(SET_VOLUME, json!({"level": 42})))
+            .await;
         assert!(accepted.ok);
         let rejected = runner
-            .run(&ctx, &ToolCall { id: "c2".into(), name: "unknown_tool".into(), args: json!({}) })
+            .run(
+                &ctx,
+                &ToolCall {
+                    id: "c2".into(),
+                    name: "unknown_tool".into(),
+                    args: json!({}),
+                },
+            )
             .await;
         assert_eq!(rejected.error_code.as_deref(), Some("unknown_tool"));
         assert_eq!(
             runner.dry_run_calls(),
-            &[DryRunCall { call_id: "c1".into(), name: SET_VOLUME.into(), args: json!({"level": 42}) }]
+            &[DryRunCall {
+                call_id: "c1".into(),
+                name: SET_VOLUME.into(),
+                args: json!({"level": 42})
+            }]
         );
         assert_eq!(runner.outcomes().len(), 2);
     }
@@ -991,15 +1186,30 @@ mod tests {
         let ctx = ToolContext::new(&spotify, &settings, Some("old".into()));
         assert_eq!(ctx.track_focus(), TrackFocus::Playing("old".into()));
         ctx.note_playback(Some("new"));
-        assert_eq!(ctx.track_focus(), TrackFocus::Playing("new".into()), "a confirmed play moves the focus");
+        assert_eq!(
+            ctx.track_focus(),
+            TrackFocus::Playing("new".into()),
+            "a confirmed play moves the focus"
+        );
         ctx.note_playback(None);
-        assert_eq!(ctx.track_focus(), TrackFocus::Unconfirmed, "a failed play leaves the focus unclear");
+        assert_eq!(
+            ctx.track_focus(),
+            TrackFocus::Unconfirmed,
+            "a failed play leaves the focus unclear"
+        );
         let mut runner = ToolRunner::new(Arc::new(AtomicBool::new(false)));
         let outcome = runner.run(&ctx, &call(LIKE_CURRENT, json!({}))).await;
         assert_eq!(outcome.error_code.as_deref(), Some("track_unconfirmed"));
         let fresh = ToolContext::new(&spotify, &settings, None);
         let outcome = runner
-            .run(&fresh, &ToolCall { id: "c2".into(), name: UNLIKE_CURRENT.into(), args: json!({}) })
+            .run(
+                &fresh,
+                &ToolCall {
+                    id: "c2".into(),
+                    name: UNLIKE_CURRENT.into(),
+                    args: json!({}),
+                },
+            )
             .await;
         assert_eq!(outcome.error_code.as_deref(), Some("nothing_playing"));
     }
@@ -1019,7 +1229,10 @@ mod tests {
 
     /// A result from a source that only provides the joined display string.
     fn display_only_result(name: &str, artist: &str) -> SearchResult {
-        SearchResult { artist_names: Vec::new(), ..search_result(name, &[artist]) }
+        SearchResult {
+            artist_names: Vec::new(),
+            ..search_result(name, &[artist])
+        }
     }
 
     #[test]
@@ -1029,11 +1242,27 @@ mod tests {
             search_result("Fly Me to the Moon", &["Frank Sinatra", "Count Basie"]),
         ];
         assert_eq!(pick_track(&results, "Frank Sinatra"), (1, true));
-        assert_eq!(pick_track(&results, "  frank   SINATRA "), (1, true), "case and spacing do not matter");
-        assert_eq!(pick_track(&results, "Count Basie"), (1, true), "any credited artist counts");
+        assert_eq!(
+            pick_track(&results, "  frank   SINATRA "),
+            (1, true),
+            "case and spacing do not matter"
+        );
+        assert_eq!(
+            pick_track(&results, "Count Basie"),
+            (1, true),
+            "any credited artist counts"
+        );
         assert_eq!(pick_track(&results, "Yoko Takahashi"), (0, true));
-        assert_eq!(pick_track(&results, "Sinatra"), (0, false), "short forms are not guessed; the user confirms");
-        assert_eq!(pick_track(&results, "Diana Krall"), (0, false), "no match is reported, never played as a substitute");
+        assert_eq!(
+            pick_track(&results, "Sinatra"),
+            (0, false),
+            "short forms are not guessed; the user confirms"
+        );
+        assert_eq!(
+            pick_track(&results, "Diana Krall"),
+            (0, false),
+            "no match is reported, never played as a substitute"
+        );
         assert_eq!(pick_track(&results, ""), (0, true));
 
         let lookalikes = vec![
@@ -1068,21 +1297,58 @@ mod tests {
     fn optional_artist_and_prompt_modes_validate() {
         assert_eq!(
             validate(&call(SEARCH_AND_PLAY, json!({"query": "x"}))).unwrap(),
-            Invocation::SearchAndPlay { query: "x".into(), artist: String::new() },
+            Invocation::SearchAndPlay {
+                query: "x".into(),
+                artist: String::new()
+            },
             "legacy callers without `artist` still work"
         );
         assert_eq!(
-            validate(&call(SEARCH_AND_PLAY, json!({"query": "x", "artist": " Frank Sinatra "}))).unwrap(),
-            Invocation::SearchAndPlay { query: "x".into(), artist: "Frank Sinatra".into() }
+            validate(&call(
+                SEARCH_AND_PLAY,
+                json!({"query": "x", "artist": " Frank Sinatra "})
+            ))
+            .unwrap(),
+            Invocation::SearchAndPlay {
+                query: "x".into(),
+                artist: "Frank Sinatra".into()
+            }
         );
-        assert_eq!(validate(&call(SEARCH_AND_PLAY, json!({"query": "x", "artist": 5}))).unwrap_err().code, "invalid_argument");
         assert_eq!(
-            validate(&call(UPDATE_PROMPT, json!({"type": "chat", "content": "Be brief.", "mode": "append"}))).unwrap(),
-            Invocation::UpdatePrompt { kind: PromptKind::Chat, content: "Be brief.".into(), mode: PromptMode::Append }
+            validate(&call(SEARCH_AND_PLAY, json!({"query": "x", "artist": 5})))
+                .unwrap_err()
+                .code,
+            "invalid_argument"
         );
-        assert_eq!(validate(&call(UPDATE_PROMPT, json!({"type": "chat", "content": "x", "mode": "merge"}))).unwrap_err().code, "invalid_argument");
-        assert_eq!(merged_prompt("Old prompt.\n", "Be brief.", &PromptMode::Append), "Old prompt.\n\nBe brief.");
-        assert_eq!(merged_prompt("", "Be brief.", &PromptMode::Append), "Be brief.");
+        assert_eq!(
+            validate(&call(
+                UPDATE_PROMPT,
+                json!({"type": "chat", "content": "Be brief.", "mode": "append"})
+            ))
+            .unwrap(),
+            Invocation::UpdatePrompt {
+                kind: PromptKind::Chat,
+                content: "Be brief.".into(),
+                mode: PromptMode::Append
+            }
+        );
+        assert_eq!(
+            validate(&call(
+                UPDATE_PROMPT,
+                json!({"type": "chat", "content": "x", "mode": "merge"})
+            ))
+            .unwrap_err()
+            .code,
+            "invalid_argument"
+        );
+        assert_eq!(
+            merged_prompt("Old prompt.\n", "Be brief.", &PromptMode::Append),
+            "Old prompt.\n\nBe brief."
+        );
+        assert_eq!(
+            merged_prompt("", "Be brief.", &PromptMode::Append),
+            "Be brief."
+        );
         assert_eq!(merged_prompt("Old", "New", &PromptMode::Replace), "New");
     }
 }

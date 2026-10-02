@@ -56,9 +56,18 @@ mod tests {
 
     #[test]
     fn names_are_matched_exactly_in_a_comma_list() {
-        assert!(active_in(Some("tts_hang, spotify_not_connected"), "spotify_not_connected"));
-        assert!(active_in(Some("spotify_not_connected"), "spotify_not_connected"));
-        assert!(!active_in(Some("spotify_not_connected_x"), "spotify_not_connected"));
+        assert!(active_in(
+            Some("tts_hang, spotify_not_connected"),
+            "spotify_not_connected"
+        ));
+        assert!(active_in(
+            Some("spotify_not_connected"),
+            "spotify_not_connected"
+        ));
+        assert!(!active_in(
+            Some("spotify_not_connected_x"),
+            "spotify_not_connected"
+        ));
         assert!(!active_in(Some(""), "spotify_not_connected"));
         assert!(!active_in(None, "spotify_not_connected"));
     }
@@ -66,7 +75,10 @@ mod tests {
     #[test]
     fn values_are_read_from_name_equals_value_entries() {
         assert!(active_in(Some("tool_delay=15"), "tool_delay"));
-        assert_eq!(value_in(Some("tool_delay=15, tts_hang"), "tool_delay").as_deref(), Some("15"));
+        assert_eq!(
+            value_in(Some("tool_delay=15, tts_hang"), "tool_delay").as_deref(),
+            Some("15")
+        );
         assert_eq!(value_in(Some("tool_delay"), "tool_delay"), None);
         assert_eq!(value_in(Some("tts_hang"), "tool_delay"), None);
         assert!(!active_in(Some("tool_delay=15"), "tool"));

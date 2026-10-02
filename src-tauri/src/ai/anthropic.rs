@@ -7,7 +7,10 @@ use std::time::Duration;
 use super::cache::TrackInfoCache;
 use super::models::{CatalogCache, ModelInfo, ModelProvider, ModelSelection, ProviderCatalog};
 use super::tools::{self, ChatCancellation, ToolContext, ToolRunner};
-use super::{legacy_system_prompt, native_system_prompt, render_chat_prompt, AgentResponse, ChatMessage, NativeChatOutcome};
+use super::{
+    legacy_system_prompt, native_system_prompt, render_chat_prompt, AgentResponse, ChatMessage,
+    NativeChatOutcome,
+};
 use crate::auth::AnthropicAuth;
 use crate::claude_runtime::{ClaudeAuthenticationError, ClaudeSession, HelperEvent};
 use crate::spotify::TrackInfo;
@@ -109,7 +112,8 @@ impl AnthropicService {
         runner: &mut ToolRunner,
         cancellation: &ChatCancellation,
     ) -> Result<NativeChatOutcome> {
-        let rendered = render_chat_prompt(prompt_template, track_name, artist, album, volume, memories);
+        let rendered =
+            render_chat_prompt(prompt_template, track_name, artist, album, volume, memories);
         let request = json!({
             "action": "prompt",
             "protocol": "native",
@@ -119,7 +123,12 @@ impl AnthropicService {
             "tools": tools::definitions(),
             "maxTurns": 4,
         });
-        let session = match self.auth.runtime.start(request, Duration::from_secs(240)).await {
+        let session = match self
+            .auth
+            .runtime
+            .start(request, Duration::from_secs(240))
+            .await
+        {
             Ok(session) => session,
             Err(error) => {
                 self.note_auth_error(&error).await;
@@ -246,11 +255,18 @@ fn format_native_history(messages: &[ChatMessage]) -> String {
                 "Conversation so far (earlier turns, for context only). Reply to the latest user message; use the tools for any action.\n\n",
             );
             for message in messages {
-                let speaker = if message.role == "assistant" { "Assistant" } else { "User" };
+                let speaker = if message.role == "assistant" {
+                    "Assistant"
+                } else {
+                    "User"
+                };
                 transcript.push_str(&format!("{speaker}: {}\n", message.content));
                 for result in &message.tool_results {
                     let status = if result.ok { "ok" } else { "failed" };
-                    transcript.push_str(&format!("  [tool {} → {status}: {}]\n", result.name, result.output));
+                    transcript.push_str(&format!(
+                        "  [tool {} → {status}: {}]\n",
+                        result.name, result.output
+                    ));
                 }
                 transcript.push('\n');
             }
@@ -316,7 +332,10 @@ mod tests {
         let cancellation = ChatCancellation::new();
         let session = helper
             .runtime
-            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(60))
+            .start(
+                json!({"action":"prompt","protocol":"native"}),
+                Duration::from_secs(60),
+            )
             .await
             .unwrap();
         let error = drive_native_session(session, &ctx, &mut runner, &cancellation)
@@ -343,7 +362,10 @@ mod tests {
         let cancellation = ChatCancellation::new();
         let session = helper
             .runtime
-            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(120))
+            .start(
+                json!({"action":"prompt","protocol":"native"}),
+                Duration::from_secs(120),
+            )
             .await
             .unwrap();
         let canceller = cancellation.clone();
@@ -362,7 +384,11 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), tools::CANCELLED);
-        assert!(started.elapsed() < Duration::from_secs(15), "took {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "took {:?}",
+            started.elapsed()
+        );
         assert_eq!(runner.outcomes().len(), 1);
         assert!(runner.outcomes()[0].ok);
     }
@@ -375,7 +401,10 @@ mod tests {
             assert!(!native.contains("reply with a single JSON object"));
             assert!(!native.contains("Tool response format"));
             assert_eq!(native.matches(NATIVE_TOOL_GUIDANCE).count(), 1);
-            assert!(native.contains("Music playback intent"), "intent rules must survive");
+            assert!(
+                native.contains("Music playback intent"),
+                "intent rules must survive"
+            );
             assert!(native.contains("Current playback: Song - Artist (Album)"));
         }
     }
@@ -383,12 +412,20 @@ mod tests {
     #[test]
     fn the_shipped_default_is_already_native_and_legacy_can_be_derived_from_it() {
         let rendered = render_chat_prompt(DEFAULT_CHAT_PROMPT, "Song", "Artist", "Album", 60, &[]);
-        assert_eq!(native_system_prompt(&rendered), rendered, "no duplicate guidance");
+        assert_eq!(
+            native_system_prompt(&rendered),
+            rendered,
+            "no duplicate guidance"
+        );
         let legacy = legacy_system_prompt(&rendered);
         assert!(legacy.contains(LEGACY_TOOL_SECTION_START));
         assert!(!legacy.contains(NATIVE_TOOL_GUIDANCE));
         assert!(legacy.contains("Music playback intent"));
-        assert_eq!(legacy_system_prompt(&legacy), legacy, "legacy conversion is idempotent");
+        assert_eq!(
+            legacy_system_prompt(&legacy),
+            legacy,
+            "legacy conversion is idempotent"
+        );
         assert!(legacy_system_prompt("You are a DJ.").ends_with("no JSON needed."));
     }
 
@@ -401,16 +438,35 @@ mod tests {
 
     #[test]
     fn native_history_sends_a_single_message_verbatim_and_renders_tool_results_otherwise() {
-        let single = vec![ChatMessage { role: "user".into(), content: "播放晴天".into(), tool_results: vec![] }];
+        let single = vec![ChatMessage {
+            role: "user".into(),
+            content: "播放晴天".into(),
+            tool_results: vec![],
+        }];
         assert_eq!(format_native_history(&single), "播放晴天");
         let history = vec![
-            ChatMessage { role: "user".into(), content: "音量30".into(), tool_results: vec![] },
+            ChatMessage {
+                role: "user".into(),
+                content: "音量30".into(),
+                tool_results: vec![],
+            },
             ChatMessage {
                 role: "assistant".into(),
                 content: "已调到30。".into(),
-                tool_results: vec![ToolOutcome { call_id: "c".into(), name: "set_volume".into(), ok: true, output: "Volume set to 30.".into(), error_code: None, track_name: None }],
+                tool_results: vec![ToolOutcome {
+                    call_id: "c".into(),
+                    name: "set_volume".into(),
+                    ok: true,
+                    output: "Volume set to 30.".into(),
+                    error_code: None,
+                    track_name: None,
+                }],
             },
-            ChatMessage { role: "user".into(), content: "再大一点".into(), tool_results: vec![] },
+            ChatMessage {
+                role: "user".into(),
+                content: "再大一点".into(),
+                tool_results: vec![],
+            },
         ];
         let transcript = format_native_history(&history);
         assert!(transcript.contains("User: 音量30"));

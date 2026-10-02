@@ -1,6 +1,8 @@
 use crate::ai::events::{self, EventContext};
 use crate::ai::models::{ModelProvider, ModelSelection, ProviderCatalog};
-use crate::ai::tools::{self, ChatCancellation, ToolCall, ToolContext, ToolOutcome, ToolProtocol, ToolRunner};
+use crate::ai::tools::{
+    self, ChatCancellation, ToolCall, ToolContext, ToolOutcome, ToolProtocol, ToolRunner,
+};
 use crate::ai::{AgentResponse, AnthropicService, ChatMessage, NativeChatOutcome, OpenAIService};
 use crate::auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use crate::lyrics::{LyricsFetcher, LyricsInfo};
@@ -774,7 +776,10 @@ pub async fn agent_chat(
 /// process) and prevents further tool execution. Actions already performed stay done. A
 /// cancel for a request that already finished or was replaced is ignored.
 #[tauri::command]
-pub async fn agent_chat_cancel(state: State<'_, AppState>, request_id: String) -> Result<(), String> {
+pub async fn agent_chat_cancel(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<(), String> {
     let mut slot = state.chat_cancel.lock().await;
     if slot.as_ref().is_some_and(|(id, _)| *id == request_id) {
         if let Some((_, cancellation)) = slot.take() {
@@ -850,7 +855,12 @@ async fn run_agent_chat(
                 )
                 .await
                 .map_err(|e| e.to_string())
-                .map(|outcome| (outcome.turns.unwrap_or(1), native_response(outcome, &runner)))
+                .map(|outcome| {
+                    (
+                        outcome.turns.unwrap_or(1),
+                        native_response(outcome, &runner),
+                    )
+                })
         }
         (ModelProvider::Openai, ToolProtocol::Native) => {
             let service = state.openai_service.read().await;
@@ -874,7 +884,12 @@ async fn run_agent_chat(
                 )
                 .await
                 .map_err(|e| e.to_string())
-                .map(|outcome| (outcome.turns.unwrap_or(1), native_response(outcome, &runner)))
+                .map(|outcome| {
+                    (
+                        outcome.turns.unwrap_or(1),
+                        native_response(outcome, &runner),
+                    )
+                })
         }
         (_, ToolProtocol::Legacy) => {
             let response = tokio::select! {
@@ -924,7 +939,11 @@ async fn run_agent_chat(
     match completed {
         Ok((_, response)) => Ok(finish(response, tool_results, None)),
         Err(error) => {
-            let error = if cancelled { tools::CANCELLED.to_string() } else { error };
+            let error = if cancelled {
+                tools::CANCELLED.to_string()
+            } else {
+                error
+            };
             if tool_results.is_empty() {
                 return Err(error);
             }
@@ -965,7 +984,17 @@ async fn legacy_chat(
             .as_ref()
             .ok_or("Claude not connected. Please sign in first.")?;
         anthropic
-            .agent_chat(messages, model, chat_prompt, track_name, artist, album, volume, web_search, memories)
+            .agent_chat(
+                messages,
+                model,
+                chat_prompt,
+                track_name,
+                artist,
+                album,
+                volume,
+                web_search,
+                memories,
+            )
             .await
             .map_err(|e| e.to_string())
     } else {
@@ -974,7 +1003,17 @@ async fn legacy_chat(
             .as_ref()
             .ok_or("ChatGPT not connected. Please connect in Settings.")?;
         openai
-            .agent_chat(messages, model, chat_prompt, track_name, artist, album, volume, web_search, memories)
+            .agent_chat(
+                messages,
+                model,
+                chat_prompt,
+                track_name,
+                artist,
+                album,
+                volume,
+                web_search,
+                memories,
+            )
             .await
             .map_err(|e| e.to_string())
     }
@@ -984,7 +1023,11 @@ async fn legacy_chat(
 /// tool ran and every tool call succeeded; `track_name` is the track now playing because of
 /// this request; `error` is a request-level failure (provider error or cancellation), never
 /// a single tool's failure, which stays in `tool_results`.
-fn finish(response: AgentResponse, tool_results: Vec<ToolOutcome>, error: Option<String>) -> AgentChatResult {
+fn finish(
+    response: AgentResponse,
+    tool_results: Vec<ToolOutcome>,
+    error: Option<String>,
+) -> AgentChatResult {
     let executed = !tool_results.is_empty() && tool_results.iter().all(|outcome| outcome.ok);
     let track_name = tool_results
         .iter()
@@ -1115,7 +1158,19 @@ async fn probe_provider(state: &AppState, provider: ModelProvider) -> Result<Pro
                 .as_ref()
                 .ok_or("Claude not connected. Please sign in first.")?;
             anthropic
-                .agent_chat_native(&messages, &model, &chat_prompt, "Probe Track", "Probe Artist", "Probe Album", 60, &[], &ctx, &mut runner, &cancellation)
+                .agent_chat_native(
+                    &messages,
+                    &model,
+                    &chat_prompt,
+                    "Probe Track",
+                    "Probe Artist",
+                    "Probe Album",
+                    60,
+                    &[],
+                    &ctx,
+                    &mut runner,
+                    &cancellation,
+                )
                 .await
         }
         ModelProvider::Openai => {
@@ -1124,7 +1179,20 @@ async fn probe_provider(state: &AppState, provider: ModelProvider) -> Result<Pro
                 .as_ref()
                 .ok_or("ChatGPT not connected. Please connect in Settings.")?;
             openai
-                .agent_chat_native(&messages, &model, &chat_prompt, "Probe Track", "Probe Artist", "Probe Album", 60, false, &[], &ctx, &mut runner, &cancellation)
+                .agent_chat_native(
+                    &messages,
+                    &model,
+                    &chat_prompt,
+                    "Probe Track",
+                    "Probe Artist",
+                    "Probe Album",
+                    60,
+                    false,
+                    &[],
+                    &ctx,
+                    &mut runner,
+                    &cancellation,
+                )
                 .await
         }
     };
@@ -1148,20 +1216,29 @@ async fn probe_provider(state: &AppState, provider: ModelProvider) -> Result<Pro
             })
         })
         .collect();
-    Ok(ProbeRun { model, tool_calls, outcome })
+    Ok(ProbeRun {
+        model,
+        tool_calls,
+        outcome,
+    })
 }
 
 const PROBE_PASS_CRITERIA: &str =
     "ok, exactly one tool call, it is set_volume with ok=true and numeric level 42, non-empty final text";
 
 fn probe_passed(report: &serde_json::Value) -> bool {
-    let calls = report["tool_calls"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    let calls = report["tool_calls"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     report["ok"] == true
         && calls.len() == 1
         && calls[0]["name"] == "set_volume"
         && calls[0]["ok"] == true
         && calls[0]["args"]["level"].as_f64() == Some(42.0)
-        && report["text"].as_str().is_some_and(|text| !text.trim().is_empty())
+        && report["text"]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 // ============ Lyrics Commands ============
@@ -1284,21 +1361,37 @@ mod tests {
     fn multi_action_results_are_aggregated_from_every_outcome() {
         let result = finish(
             reply(),
-            vec![outcome("set_volume", false, None), outcome("search_and_play", true, Some("Song"))],
+            vec![
+                outcome("set_volume", false, None),
+                outcome("search_and_play", true, Some("Song")),
+            ],
             None,
         );
-        assert!(!result.executed, "a failed call means not everything was executed");
+        assert!(
+            !result.executed,
+            "a failed call means not everything was executed"
+        );
         assert_eq!(result.track_name.as_deref(), Some("Song"));
-        assert!(result.error.is_none(), "per-call failures stay in tool_results");
+        assert!(
+            result.error.is_none(),
+            "per-call failures stay in tool_results"
+        );
         assert_eq!(result.tool_results.len(), 2);
 
         let result = finish(
             reply(),
-            vec![outcome("search_and_play", true, Some("Song")), outcome("set_volume", true, None)],
+            vec![
+                outcome("search_and_play", true, Some("Song")),
+                outcome("set_volume", true, None),
+            ],
             None,
         );
         assert!(result.executed);
-        assert_eq!(result.track_name.as_deref(), Some("Song"), "the track comes from the play call, not the last call");
+        assert_eq!(
+            result.track_name.as_deref(),
+            Some("Song"),
+            "the track comes from the play call, not the last call"
+        );
 
         let result = finish(reply(), vec![], None);
         assert!(!result.executed);
@@ -1307,7 +1400,11 @@ mod tests {
 
     #[test]
     fn request_level_errors_keep_the_executed_outcomes() {
-        let result = finish(reply(), vec![outcome("like_current", true, None)], Some(tools::CANCELLED.to_string()));
+        let result = finish(
+            reply(),
+            vec![outcome("like_current", true, None)],
+            Some(tools::CANCELLED.to_string()),
+        );
         assert!(result.executed);
         assert_eq!(result.error.as_deref(), Some("Cancelled"));
         assert_eq!(result.tool_results[0].name, "like_current");
@@ -1331,6 +1428,8 @@ mod tests {
             .unwrap()
             .push(serde_json::json!({"name": "like_current", "ok": true, "args": {}}));
         assert!(!probe_passed(&report), "extra tool calls fail the probe");
-        assert!(!probe_passed(&serde_json::json!({"ok": false, "error": "boom", "tool_calls": []})));
+        assert!(!probe_passed(
+            &serde_json::json!({"ok": false, "error": "boom", "tool_calls": []})
+        ));
     }
 }

@@ -36,16 +36,16 @@ pub(crate) mod test_support {
         pub(crate) fn new(script: &str) -> Self {
             // Scripts that start by reading the request line manage stdin themselves;
             // the others drain it like the real helper does for single-response actions.
-            let prelude = if script.starts_with("IFS= read") { "" } else { "/bin/cat >/dev/null\n" };
+            let prelude = if script.starts_with("IFS= read") {
+                ""
+            } else {
+                "/bin/cat >/dev/null\n"
+            };
             let dir = std::env::temp_dir()
                 .join(format!("expotify-runtime-test-{}", rand::random::<u64>()));
             std::fs::create_dir(&dir).unwrap();
             let helper = dir.join("helper");
-            std::fs::write(
-                &helper,
-                format!("#!/bin/sh\n{prelude}{script}\n"),
-            )
-            .unwrap();
+            std::fs::write(&helper, format!("#!/bin/sh\n{prelude}{script}\n")).unwrap();
             std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
             let runtime = Arc::new(ClaudeRuntime::new(helper, dir.join("config")).unwrap());
             Self { dir, runtime }
@@ -100,10 +100,15 @@ mod tests {
     /// child's pid first, so the check does not depend on how fast a fresh script starts.
     #[tokio::test]
     async fn dropping_a_session_kills_native_descendants() {
-        let fixture = Fixture::new("IFS= read -r request\n/bin/sleep 60 &\nprintf '%s' $! > descendant\nwait");
+        let fixture = Fixture::new(
+            "IFS= read -r request\n/bin/sleep 60 &\nprintf '%s' $! > descendant\nwait",
+        );
         let session = fixture
             .runtime
-            .start(json!({"action":"status","protocol":"native"}), Duration::from_secs(60))
+            .start(
+                json!({"action":"status","protocol":"native"}),
+                Duration::from_secs(60),
+            )
             .await
             .unwrap();
         let descendant = fixture.dir.join("config/descendant");
@@ -115,8 +120,15 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        let pid: i32 = recorded.trim().parse().expect("the helper must record its child's pid");
-        assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "the child must be alive before the drop");
+        let pid: i32 = recorded
+            .trim()
+            .parse()
+            .expect("the helper must record its child's pid");
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "the child must be alive before the drop"
+        );
         drop(session);
         let mut exited = false;
         for _ in 0..200 {
@@ -176,7 +188,10 @@ mod tests {
         );
         let mut session = fixture
             .runtime
-            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(60))
+            .start(
+                json!({"action":"prompt","protocol":"native"}),
+                Duration::from_secs(60),
+            )
             .await
             .unwrap();
         let call = match session.next().await.unwrap() {
@@ -287,9 +302,7 @@ impl ClaudeSession<'_> {
                 .await
                 .map_err(|_| anyhow!(timeout_message(self.login)))??;
             if !status.success() || value["ok"] != true {
-                let message = value["error"]
-                    .as_str()
-                    .unwrap_or("Claude runtime failed");
+                let message = value["error"].as_str().unwrap_or("Claude runtime failed");
                 if value["code"] == "authentication_required" {
                     return Err(ClaudeAuthenticationError(message.to_owned()).into());
                 }
