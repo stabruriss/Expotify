@@ -8,7 +8,7 @@
 //! executed at most once, and nothing is reported as done unless the executor did it.
 
 use super::events::{self, EventContext};
-use crate::spotify::{self, SpotifyWebApi};
+use crate::spotify::{self, SearchResult, SpotifyWebApi};
 use crate::storage::Settings;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -138,10 +138,13 @@ pub fn definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: SEARCH_AND_PLAY,
-            description: "Search Spotify for a song, artist, album, genre or mood and immediately play the best match. Use this whenever the user wants music played.",
+            description: "Search Spotify for a song, artist, album, genre or mood and immediately play the best match. Use this whenever the user wants music played. When the user names an artist, pass it in `artist` as well so the match is by that artist and not a cover.",
             parameters: object_schema(
-                json!({ "query": { "type": "string", "description": "Search query built from the user's request, e.g. '晴天 周杰伦' or 'rainy day jazz'" } }),
-                &["query"],
+                json!({
+                    "query": { "type": "string", "description": "Search text built from the user's request, including the artist when one was named, e.g. 'Fly Me to the Moon Frank Sinatra', '晴天 周杰伦' or 'rainy day jazz'" },
+                    "artist": { "type": "string", "description": "The artist the user named, exactly as given; an empty string when no artist was named" }
+                }),
+                &["query", "artist"],
             ),
         },
         ToolDefinition {
@@ -177,13 +180,14 @@ pub fn definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: UPDATE_PROMPT,
-            description: "Replace the AI Insight prompt ('insight') or the Chat prompt ('chat') with new content.",
+            description: "Update the AI Insight prompt ('insight') or the Chat prompt ('chat'): replace it entirely, or append to it when the user wants to keep the existing prompt (you cannot read the current prompt, so use 'append' for additions).",
             parameters: object_schema(
                 json!({
                     "type": { "type": "string", "enum": ["insight", "chat"], "description": "Which prompt to update" },
-                    "content": { "type": "string", "description": "The full new prompt text" }
+                    "content": { "type": "string", "description": "With mode 'replace': the full new prompt text. With mode 'append': only the text to add at the end." },
+                    "mode": { "type": "string", "enum": ["replace", "append"], "description": "'replace' overwrites the whole prompt; 'append' keeps the current prompt and adds the content after it" }
                 }),
-                &["type", "content"],
+                &["type", "content", "mode"],
             ),
         },
     ]
@@ -221,16 +225,22 @@ pub enum PromptKind {
     Chat,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptMode {
+    Replace,
+    Append,
+}
+
 /// A validated, typed invocation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Invocation {
-    SearchAndPlay { query: String },
+    SearchAndPlay { query: String, artist: String },
     LikeCurrent,
     UnlikeCurrent,
     ShuffleLiked,
     SetVolume { level: u32 },
     SaveMemory { content: String },
-    UpdatePrompt { kind: PromptKind, content: String },
+    UpdatePrompt { kind: PromptKind, content: String, mode: PromptMode },
 }
 
 impl Invocation {
@@ -278,6 +288,18 @@ fn required_string(args: &Value, key: &str) -> Result<String, ToolError> {
     }
 }
 
+/// A string argument that may be absent (legacy callers): absent or null reads as empty.
+fn optional_string(args: &Value, key: &str) -> Result<String, ToolError> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(String::new()),
+        Some(Value::String(s)) => Ok(s.trim().to_string()),
+        Some(_) => Err(ToolError::new(
+            "invalid_argument",
+            format!("`{key}` must be a string"),
+        )),
+    }
+}
+
 /// Validate a call against the registry. Numeric arguments must be JSON numbers
 /// (an integral float such as 50.0 is accepted; a numeric string is not).
 pub fn validate(call: &ToolCall) -> Result<Invocation, ToolError> {
@@ -295,6 +317,7 @@ pub fn validate(call: &ToolCall) -> Result<Invocation, ToolError> {
     match call.name.as_str() {
         SEARCH_AND_PLAY => Ok(Invocation::SearchAndPlay {
             query: required_string(&args, "query")?,
+            artist: optional_string(&args, "artist")?,
         }),
         LIKE_CURRENT => Ok(Invocation::LikeCurrent),
         UNLIKE_CURRENT => Ok(Invocation::UnlikeCurrent),
@@ -335,9 +358,20 @@ pub fn validate(call: &ToolCall) -> Result<Invocation, ToolError> {
                     ))
                 }
             };
+            let mode = match optional_string(&args, "mode")?.as_str() {
+                "" | "replace" => PromptMode::Replace,
+                "append" => PromptMode::Append,
+                other => {
+                    return Err(ToolError::new(
+                        "invalid_argument",
+                        format!("`mode` must be 'replace' or 'append', got '{other}'"),
+                    ))
+                }
+            };
             Ok(Invocation::UpdatePrompt {
                 kind,
                 content: required_string(&args, "content")?,
+                mode,
             })
         }
         other => Err(ToolError::new(
@@ -561,18 +595,81 @@ impl ToolRunner {
     }
 }
 
+/// Index of the first result by `artist` (case-insensitive; either name may contain the
+/// other), with a flag saying whether the artist matched. Without a named artist the top
+/// hit is taken.
+fn pick_track(results: &[SearchResult], artist: &str) -> (usize, bool) {
+    let wanted = artist.trim().to_lowercase();
+    if wanted.is_empty() {
+        return (0, true);
+    }
+    let found = results.iter().position(|result| {
+        result
+            .artist
+            .split(',')
+            .map(|name| name.trim().to_lowercase())
+            .any(|name| {
+                !name.is_empty()
+                    && (name.contains(&wanted) || (wanted.contains(&name) && name.chars().count() >= 3))
+            })
+    });
+    match found {
+        Some(index) => (index, true),
+        None => (0, false),
+    }
+}
+
+/// The prompt text after an update: `append` keeps the existing prompt and adds the new
+/// text as a final paragraph.
+fn merged_prompt(previous: &str, content: &str, mode: &PromptMode) -> String {
+    match mode {
+        PromptMode::Replace => content.to_string(),
+        PromptMode::Append => {
+            let base = previous.trim_end();
+            if base.is_empty() {
+                content.to_string()
+            } else {
+                format!("{base}\n\n{content}")
+            }
+        }
+    }
+}
+
 async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation) -> ToolOutcome {
     match invocation {
-        Invocation::SearchAndPlay { query } => {
+        Invocation::SearchAndPlay { query, artist } => {
+            // With a named artist, look past Spotify's personalised first hit and take the
+            // first result by that artist; a substitute by someone else is never played on
+            // the user's behalf. Without a named artist the top hit is the best match.
+            let limit = if artist.is_empty() { 1 } else { 10 };
             let results = {
                 let webapi = ctx.spotify_webapi.read().await;
                 let Some(webapi) = webapi.as_ref() else {
                     return ToolOutcome::failure(call, "spotify_not_connected", "Spotify is not connected. Connect it in Settings.");
                 };
-                webapi.search_tracks(&query, 1).await
+                webapi.search_tracks(&query, limit).await
             };
             let track = match results {
-                Ok(mut results) if !results.is_empty() => results.remove(0),
+                Ok(mut results) if !results.is_empty() => {
+                    let (index, matched) = pick_track(&results, &artist);
+                    if !matched {
+                        ctx.note_playback(None);
+                        let candidates: Vec<String> = results
+                            .iter()
+                            .take(3)
+                            .map(|result| format!("{} - {}", result.name, result.artist))
+                            .collect();
+                        return ToolOutcome::failure(
+                            call,
+                            "artist_not_found",
+                            format!(
+                                "No result by \"{artist}\" among the top {limit} matches for \"{query}\"; nothing was played. Closest matches: {}. Ask the user whether one of these will do.",
+                                candidates.join("; ")
+                            ),
+                        );
+                    }
+                    results.remove(index)
+                }
                 Ok(_) => {
                     ctx.note_playback(None);
                     return ToolOutcome::failure(call, "no_results", format!("No Spotify results for \"{query}\"."));
@@ -692,15 +789,22 @@ async fn execute(ctx: &ToolContext<'_>, call: &ToolCall, invocation: Invocation)
                 }
             }
         }
-        Invocation::UpdatePrompt { kind, content } => {
+        Invocation::UpdatePrompt { kind, content, mode } => {
             let mut settings = ctx.settings.write().await;
             let (slot, label) = match kind {
                 PromptKind::Insight => (&mut settings.ai_prompt, "insight"),
                 PromptKind::Chat => (&mut settings.chat_prompt, "chat"),
             };
-            let previous = std::mem::replace(slot, content);
+            let merged = merged_prompt(slot, &content, &mode);
+            let previous = std::mem::replace(slot, merged);
             match settings.save() {
-                Ok(()) => ToolOutcome::success(call, format!("Updated the {label} prompt.")),
+                Ok(()) => ToolOutcome::success(
+                    call,
+                    match mode {
+                        PromptMode::Replace => format!("Replaced the {label} prompt."),
+                        PromptMode::Append => format!("Appended to the {label} prompt; the earlier text is kept."),
+                    },
+                ),
                 Err(e) => {
                     match kind {
                         PromptKind::Insight => settings.ai_prompt = previous,
@@ -764,7 +868,7 @@ mod tests {
         assert_eq!(validate(&call(UPDATE_PROMPT, json!({"type": "lyrics", "content": "x"}))).unwrap_err().code, "invalid_argument");
         assert_eq!(
             validate(&call(UPDATE_PROMPT, json!({"type": "chat", "content": "Be brief."}))).unwrap(),
-            Invocation::UpdatePrompt { kind: PromptKind::Chat, content: "Be brief.".into() }
+            Invocation::UpdatePrompt { kind: PromptKind::Chat, content: "Be brief.".into(), mode: PromptMode::Replace }
         );
         assert_eq!(validate(&call("play", json!({}))).unwrap_err().code, "unknown_tool");
         assert_eq!(validate(&call(LIKE_CURRENT, json!([]))).unwrap_err().code, "invalid_argument");
@@ -869,5 +973,53 @@ mod tests {
             .run(&fresh, &ToolCall { id: "c2".into(), name: UNLIKE_CURRENT.into(), args: json!({}) })
             .await;
         assert_eq!(outcome.error_code.as_deref(), Some("nothing_playing"));
+    }
+
+    fn search_result(name: &str, artist: &str) -> SearchResult {
+        SearchResult {
+            id: name.to_lowercase().replace(' ', "-"),
+            name: name.into(),
+            artist: artist.into(),
+            album: String::new(),
+            album_art_url: None,
+            duration_ms: 0,
+            uri: format!("spotify:track:{name}"),
+        }
+    }
+
+    #[test]
+    fn a_named_artist_wins_over_spotifys_first_hit() {
+        let results = vec![
+            search_result("FLY ME TO THE MOON - 2020 Version", "Yoko Takahashi"),
+            search_result("Fly Me to the Moon", "Frank Sinatra, Count Basie"),
+        ];
+        assert_eq!(pick_track(&results, "Frank Sinatra"), (1, true));
+        assert_eq!(pick_track(&results, "sinatra"), (1, true));
+        assert_eq!(pick_track(&results, "Count Basie"), (1, true));
+        assert_eq!(pick_track(&results, "Yoko Takahashi"), (0, true));
+        assert_eq!(pick_track(&results, "Diana Krall"), (0, false), "no match is reported, never played as a substitute");
+        assert_eq!(pick_track(&results, ""), (0, true));
+    }
+
+    #[test]
+    fn optional_artist_and_prompt_modes_validate() {
+        assert_eq!(
+            validate(&call(SEARCH_AND_PLAY, json!({"query": "x"}))).unwrap(),
+            Invocation::SearchAndPlay { query: "x".into(), artist: String::new() },
+            "legacy callers without `artist` still work"
+        );
+        assert_eq!(
+            validate(&call(SEARCH_AND_PLAY, json!({"query": "x", "artist": " Frank Sinatra "}))).unwrap(),
+            Invocation::SearchAndPlay { query: "x".into(), artist: "Frank Sinatra".into() }
+        );
+        assert_eq!(validate(&call(SEARCH_AND_PLAY, json!({"query": "x", "artist": 5}))).unwrap_err().code, "invalid_argument");
+        assert_eq!(
+            validate(&call(UPDATE_PROMPT, json!({"type": "chat", "content": "Be brief.", "mode": "append"}))).unwrap(),
+            Invocation::UpdatePrompt { kind: PromptKind::Chat, content: "Be brief.".into(), mode: PromptMode::Append }
+        );
+        assert_eq!(validate(&call(UPDATE_PROMPT, json!({"type": "chat", "content": "x", "mode": "merge"}))).unwrap_err().code, "invalid_argument");
+        assert_eq!(merged_prompt("Old prompt.\n", "Be brief.", &PromptMode::Append), "Old prompt.\n\nBe brief.");
+        assert_eq!(merged_prompt("", "Be brief.", &PromptMode::Append), "Be brief.");
+        assert_eq!(merged_prompt("Old", "New", &PromptMode::Replace), "New");
     }
 }

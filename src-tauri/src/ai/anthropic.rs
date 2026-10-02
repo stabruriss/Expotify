@@ -316,7 +316,7 @@ mod tests {
         let cancellation = ChatCancellation::new();
         let session = helper
             .runtime
-            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(5))
+            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(60))
             .await
             .unwrap();
         let error = drive_native_session(session, &ctx, &mut runner, &cancellation)

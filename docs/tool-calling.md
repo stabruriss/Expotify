@@ -64,6 +64,20 @@ holds no Spotify credentials or execution logic.
 - Tool calls within a request run sequentially; settings writes are serialized by the
   settings lock across requests.
 
+## Choosing the track and updating prompts
+
+`search_and_play` takes `query` (search text, including the artist when one was named) and
+`artist` (the artist the user named, or empty). With a named artist the executor fetches the
+top ten results and plays the first one by that artist, so a popular cover that Spotify ranks
+first for this account does not win over the requested version; when none of the ten is by
+that artist nothing is played and the call fails with `artist_not_found`, listing the closest
+matches so the model can ask the user instead of accepting a substitute on their behalf (the
+request's track focus becomes unconfirmed, as after any failed playback change).
+`update_prompt` takes `mode`: `replace` overwrites the prompt, `append` keeps the current
+prompt and adds the content after it (the model cannot read the current prompt, so
+additions must go through `append`). Both arguments are optional for the legacy text
+protocol (empty artist, replace).
+
 ## "The current song" inside one request
 
 `ToolContext` starts with the track that was playing when the request began and follows the

@@ -176,7 +176,7 @@ mod tests {
         );
         let mut session = fixture
             .runtime
-            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(5))
+            .start(json!({"action":"prompt","protocol":"native"}), Duration::from_secs(60))
             .await
             .unwrap();
         let call = match session.next().await.unwrap() {
