@@ -197,20 +197,22 @@ pub fn spotify_play_track(uri: &str) -> Result<()> {
     .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
     .filter(|name| !name.is_empty());
 
-    let output = run_osascript(&format!(
+    // Playback may have started even when the command reports an error or times out, so
+    // the window state is restored either way before the play result is returned.
+    let played = run_osascript(&format!(
         r#"tell application "Spotify" to play track "{uri}""#
-    ))?;
+    ));
+    restore_window_state(front_app.as_deref());
+    let output = played?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("Failed to play track: {}", stderr);
     }
-
-    restore_window_state(front_app.as_deref());
     Ok(())
 }
 
 /// Hide the Spotify window again and give focus back to the app that had it. Failures are
-/// logged only: playback has already started.
+/// logged only: playback may already have started and the caller reports the play result.
 fn restore_window_state(front_app: Option<&str>) {
     let mut script = String::from(
         "tell application \"System Events\"\n    set visible of process \"Spotify\" to false\nend tell\n",

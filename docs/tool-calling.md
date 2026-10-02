@@ -84,11 +84,14 @@ protocol (empty artist, replace).
 
 `spotify_play_track` runs the play command as its own AppleScript step; hiding the Spotify
 window and restoring focus afterwards is a separate, best-effort step whose failure is only
-logged. When the play command still reports an error, the executor reads the player's current
-track: if it is the requested track the outcome is a success that mentions the error;
-otherwise the outcome is `play_failed` and says that playback may have started and the
-current song is unknown, so the model asks instead of asserting the previous song is still
-playing (the request's track focus is unconfirmed either way until a success).
+logged. The window state is restored even when the play command reports an error, since playback
+may have started anyway. When the play command reports an error, the executor reads the
+player's current track: only the requested track actually playing counts as confirmation
+(the same track paused, another track, or an unreadable state do not) and is reported as a
+success that mentions the error; otherwise the outcome is `play_failed` and says that
+playback may have started and the current song is unknown, so the model asks instead of
+asserting the previous song is still playing (the request's track focus stays unconfirmed
+until a confirmed success).
 
 ## "The current song" inside one request
 

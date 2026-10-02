@@ -704,27 +704,38 @@ async fn start_playback(
         .ok()
         .and_then(Result::ok)
         .flatten();
-    match observed {
-        Some(current) if same_track(&current.id, &track.id) => {
-            ctx.note_playback(Some(&track.id));
-            let mut outcome = ToolOutcome::success(
-                call,
-                format!("{prefix}: {label} (playback confirmed; the window handling after it failed: {error})"),
-            );
-            outcome.track_name = Some(label);
-            outcome
-        }
-        _ => {
-            ctx.note_playback(None);
-            ToolOutcome::failure(
-                call,
-                "play_failed",
-                format!(
-                    "Could not confirm playback of \"{label}\": {error}. Playback may still have started, so the current song is unknown now; ask the user what is playing before liking or unliking."
-                ),
-            )
-        }
+    let confirmed = playback_confirmed(
+        observed
+            .as_ref()
+            .map(|current| (current.id.as_str(), current.is_playing)),
+        &track.id,
+    );
+    if confirmed {
+        ctx.note_playback(Some(&track.id));
+        let mut outcome = ToolOutcome::success(
+            call,
+            format!(
+                "{prefix}: {label} (the play command reported an error, but this track is now playing: {error})"
+            ),
+        );
+        outcome.track_name = Some(label);
+        outcome
+    } else {
+        ctx.note_playback(None);
+        ToolOutcome::failure(
+            call,
+            "play_failed",
+            format!(
+                "Could not confirm playback of \"{label}\": {error}. Playback may still have started, so the current song is unknown now; ask the user what is playing before liking or unliking."
+            ),
+        )
     }
+}
+
+/// After a play error, only the target track actually playing counts as confirmation: the
+/// same track sitting paused, another track, or no readable state all leave it unconfirmed.
+fn playback_confirmed(observed: Option<(&str, bool)>, target_id: &str) -> bool {
+    matches!(observed, Some((id, true)) if same_track(id, target_id))
 }
 
 /// Spotify track ids compare equal with or without the `spotify:track:` prefix.
@@ -1291,6 +1302,21 @@ mod tests {
         assert!(same_track("abc", "spotify:track:abc"));
         assert!(!same_track("abc", "abd"));
         assert!(!same_track("", ""));
+    }
+
+    #[test]
+    fn a_play_error_is_only_overridden_by_the_target_actually_playing() {
+        assert!(playback_confirmed(Some(("abc", true)), "abc"));
+        assert!(playback_confirmed(Some(("spotify:track:abc", true)), "abc"));
+        assert!(
+            !playback_confirmed(Some(("abc", false)), "abc"),
+            "the target sitting paused is not confirmation"
+        );
+        assert!(!playback_confirmed(Some(("other", true)), "abc"));
+        assert!(
+            !playback_confirmed(None, "abc"),
+            "an unreadable player state stays unconfirmed"
+        );
     }
 
     #[test]
