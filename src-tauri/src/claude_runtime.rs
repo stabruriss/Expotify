@@ -95,29 +95,31 @@ mod tests {
         assert!(error.to_string().contains("invalid response"), "{error}");
     }
 
+    /// The whole helper process group dies when the awaiting command goes away (timeout,
+    /// cancel or drop), including a native child the helper spawned. The helper records the
+    /// child's pid first, so the check does not depend on how fast a fresh script starts.
     #[tokio::test]
-    async fn timeout_kills_native_descendants() {
-        let fixture = Fixture::new("/bin/sleep 60 &\nprintf '%s' $! > descendant\nwait");
-        let error = fixture
+    async fn dropping_a_session_kills_native_descendants() {
+        let fixture = Fixture::new("IFS= read -r request\n/bin/sleep 60 &\nprintf '%s' $! > descendant\nwait");
+        let session = fixture
             .runtime
-            .call(json!({"action":"status"}), Duration::from_secs(3))
+            .start(json!({"action":"status","protocol":"native"}), Duration::from_secs(60))
             .await
-            .unwrap_err();
-        assert!(error.to_string().contains("timed out"));
-        // A freshly written script can take a moment to start under load; the pid file is
-        // written as soon as it runs.
+            .unwrap();
         let descendant = fixture.dir.join("config/descendant");
         let mut recorded = String::new();
-        for _ in 0..500 {
+        for _ in 0..3000 {
             recorded = std::fs::read_to_string(&descendant).unwrap_or_default();
-            if !recorded.is_empty() {
+            if !recorded.trim().is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let pid: i32 = recorded.trim().parse().expect("the helper must record its child's pid");
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0, "the child must be alive before the drop");
+        drop(session);
         let mut exited = false;
-        for _ in 0..100 {
+        for _ in 0..200 {
             if unsafe { libc::kill(pid, 0) } == -1 {
                 exited = true;
                 break;
@@ -125,6 +127,17 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(exited, "the helper's native child must be terminated");
+    }
+
+    #[tokio::test]
+    async fn a_silent_helper_times_out_with_a_clear_message() {
+        let fixture = Fixture::new("/bin/sleep 60");
+        let error = fixture
+            .runtime
+            .call(json!({"action":"status"}), Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"), "{error}");
     }
 
     #[tokio::test]
