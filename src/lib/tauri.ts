@@ -59,6 +59,10 @@ export async function ttsSynthesize(text: string): Promise<string> {
   return invoke("tts_synthesize", { text });
 }
 
+export async function ttsCheckAvailable(): Promise<void> {
+  return invoke("tts_check_available");
+}
+
 // ============ Settings ============
 
 export async function getSettings(): Promise<Settings> {

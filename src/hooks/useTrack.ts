@@ -32,6 +32,7 @@ export function useTrack(options: UseTrackOptions = {}) {
   const [track, setTrack] = useState<TrackInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [spotifyRunning, setSpotifyRunning] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [lastAiFetch, setLastAiFetch] = useState<AiFetchEvent | null>(null);
@@ -111,6 +112,7 @@ export function useTrack(options: UseTrackOptions = {}) {
         setTrack(null);
         lastTrackId.current = null;
         setAiError(null);
+        setInitialized(true);
         return;
       }
 
@@ -142,6 +144,7 @@ export function useTrack(options: UseTrackOptions = {}) {
         lastTrackId.current = null;
         setAiError(null);
       }
+      setInitialized(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -170,6 +173,7 @@ export function useTrack(options: UseTrackOptions = {}) {
     lastAiFetch,
     error,
     spotifyRunning,
+    initialized,
     fetchAi,
   };
 }

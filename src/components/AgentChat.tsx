@@ -12,6 +12,7 @@ interface AgentChatProps {
   reset: () => void;
   cancel: () => void;
   chatReadEnabled: boolean;
+  chatReadChecking?: boolean;
   onToggleChatRead: () => void;
   ttsVolume: number;
   onTtsVolumeChange: (vol: number) => void;
@@ -25,6 +26,7 @@ export function AgentChat({
   reset,
   cancel,
   chatReadEnabled,
+  chatReadChecking = false,
   onToggleChatRead,
   ttsVolume,
   onTtsVolumeChange,
@@ -77,16 +79,15 @@ export function AgentChat({
           <button
             className={`agent-chat-read-toggle${chatReadEnabled ? " active" : ""}`}
             onClick={onToggleChatRead}
-            aria-pressed={chatReadEnabled}
-            title={chatReadEnabled ? "Automatically read chat replies: ON" : "Automatically read chat replies: OFF"}
+            disabled={chatReadChecking}
+            role="switch"
+            aria-checked={chatReadEnabled}
+            aria-label="Auto Read"
+            aria-busy={chatReadChecking}
+            title={chatReadChecking ? "Checking speech service" : chatReadEnabled ? "Automatically read chat replies: ON" : "Automatically read chat replies: OFF"}
           >
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M11 5L5.5 7.5V12.5L11 10Z" />
-              <path d="M11 5L16.5 7.5V12.5L11 10Z" />
-              <circle cx="4" cy="3.5" r="2" />
-              <path d="M2 6.5V13" />
-            </svg>
-            Auto Read
+            {chatReadChecking ? "Checking..." : "Auto Read"}
+            {!chatReadChecking && <span className="overlay-read-switch-state" aria-hidden="true">{chatReadEnabled ? "ON" : "OFF"}</span>}
           </button>
           <div className="overlay-tts-volume" data-no-drag="true">
             <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">

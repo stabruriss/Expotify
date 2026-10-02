@@ -315,11 +315,17 @@ pub async fn spotify_play() -> Result<(), String> {
 #[tauri::command]
 pub async fn tts_synthesize(text: String) -> Result<String, String> {
     use base64::Engine;
-    let audio_bytes = tokio::task::spawn_blocking(move || crate::tts::synthesize(&text))
+    let audio_bytes = crate::tts::synthesize(&text)
         .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e:#}"))?;
     Ok(base64::engine::general_purpose::STANDARD.encode(&audio_bytes))
+}
+
+#[tauri::command]
+pub async fn tts_check_available() -> Result<(), String> {
+    crate::tts::check_available()
+        .await
+        .map_err(|e| format!("{e:#}"))
 }
 
 // ============ Settings Commands ============

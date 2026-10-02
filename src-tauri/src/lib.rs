@@ -265,6 +265,7 @@ pub fn run() {
             commands::spotify_pause,
             commands::spotify_play,
             commands::tts_synthesize,
+            commands::tts_check_available,
             commands::check_for_update,
             commands::open_url,
             // Spotify Web API

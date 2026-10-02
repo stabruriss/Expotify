@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { TrackInfo } from "../types";
-import { getCurrentTrack, spotifyPause, spotifyPlay, ttsSynthesize } from "../lib/tauri";
+import { getCurrentTrack, ttsSynthesize } from "../lib/tauri";
+import type { SpeechMusicPause } from "../lib/speechMusicPause";
 import type { AiFetchEvent } from "./useTrack";
 
 export type ReadAloudPhase =
@@ -13,6 +14,7 @@ export type ReadAloudPhase =
 export type ReadAloudMode = "off" | "fetched_only" | "all";
 
 interface UseReadAloudOptions {
+  music: SpeechMusicPause;
   mode: ReadAloudMode;
   autoFetchEnabled: boolean;
   track: TrackInfo | null;
@@ -21,6 +23,7 @@ interface UseReadAloudOptions {
   aiLoading: boolean;
   lastAiFetch: AiFetchEvent | null;
   ttsVolume?: number;
+  onError?: (error: unknown) => void;
 }
 
 interface UseReadAloudReturn {
@@ -53,13 +56,16 @@ function stripMarkdown(md: string): string {
 }
 
 export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
-  const { mode, autoFetchEnabled, track, displayedAi, displayedAiTrackId, aiLoading, lastAiFetch, ttsVolume = 0.8 } = options;
+  const { music, mode, autoFetchEnabled, track, displayedAi, displayedAiTrackId, aiLoading, lastAiFetch, ttsVolume = 0.8 } = options;
   const ttsVolumeRef = useRef(ttsVolume);
+  const onErrorRef = useRef(options.onError);
+  onErrorRef.current = options.onError;
 
   const [phase, setPhase] = useState<ReadAloudPhase>("idle");
   const [speechPaused, setSpeechPaused] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const musicOwnerRef = useRef<symbol | null>(null);
   const blobUrlRef = useRef<string | null>(null);
   const lastObservedTrackIdRef = useRef<string | null>(null);
   const phaseRef = useRef<ReadAloudPhase>("idle");
@@ -96,27 +102,34 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
     }
   }, []);
 
+  const releaseMusic = useCallback(() => {
+    const owner = musicOwnerRef.current;
+    musicOwnerRef.current = null;
+    return owner ? music.release(owner) : Promise.resolve();
+  }, [music]);
+
   const stopAudio = useCallback(() => {
     sessionRef.current++;
     cleanupAudio();
     pendingFetchTrackIdRef.current = null;
     updatePhase("idle");
     setSpeechPaused(false);
-  }, [cleanupAudio, updatePhase]);
+    void releaseMusic().catch((e) => console.error("Failed to restore Spotify:", e));
+  }, [cleanupAudio, updatePhase, releaseMusic]);
 
   const resumeAndReset = useCallback(async (session: number) => {
     if (sessionRef.current !== session) return;
     updatePhase("resuming");
     cleanupAudio();
     try {
-      await spotifyPlay();
+      await releaseMusic();
     } catch (e) {
       console.error("Failed to resume Spotify:", e);
     }
     if (sessionRef.current !== session) return;
     updatePhase("idle");
     setSpeechPaused(false);
-  }, [updatePhase, cleanupAudio]);
+  }, [updatePhase, cleanupAudio, releaseMusic]);
 
   const verifyCurrentTrack = useCallback(async (expectedTrackId: string, session: number) => {
     if (sessionRef.current !== session) return false;
@@ -126,7 +139,7 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
       return currentTrack?.id === expectedTrackId;
     } catch (e) {
       console.error("Failed to verify current track before read-aloud:", e);
-      return activeTrackIdRef.current === expectedTrackId;
+      return sessionRef.current === session && activeTrackIdRef.current === expectedTrackId;
     }
   }, []);
 
@@ -158,12 +171,13 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
           audio.volume = ttsVolumeRef.current;
           audioRef.current = audio;
           audio.onended = () => resolve();
-          audio.onerror = (e) => reject(e);
+          audio.onerror = () => reject(new Error(audio.error?.message || "Could not play speech audio"));
           audio.play().then(() => undefined).catch(reject);
         });
       } catch (e) {
         if (sessionRef.current !== session) return;
         console.error("[ReadAloud] TTS error:", e);
+        onErrorRef.current?.(e);
       }
 
       if (sessionRef.current !== session) return;
@@ -179,17 +193,21 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
       return;
     }
     isAutoTriggeredRef.current = autoTriggered;
+    const owner = Symbol("Insight speech");
+    musicOwnerRef.current = owner;
     updatePhase("pausing");
     try {
-      await spotifyPause();
+      await music.hold(owner);
     } catch (e) {
       console.error("Failed to pause Spotify:", e);
+      if (musicOwnerRef.current === owner) musicOwnerRef.current = null;
+      if (sessionRef.current === session) onErrorRef.current?.(e);
       if (sessionRef.current === session) updatePhase("idle");
       return;
     }
     if (sessionRef.current !== session) return;
     await speakText(markdown, session);
-  }, [speakText, updatePhase, verifyCurrentTrack]);
+  }, [music, speakText, updatePhase, verifyCurrentTrack]);
 
   // Track changed while reading: stop immediately.
   useEffect(() => {
@@ -198,13 +216,9 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
     activeTrackIdRef.current = track.id;
 
     if (phaseRef.current !== "idle" && prevTrack && prevTrack !== track.id) {
-      const wasAutoTriggered = isAutoTriggeredRef.current;
       stopAudio();
-      if (mode === "off" || !wasAutoTriggered) {
-        spotifyPlay().catch(() => {});
-      }
     }
-  }, [track?.id, stopAudio, mode]);
+  }, [track?.id, stopAudio]);
 
   // Track change: in "all" mode, auto-read cached insights for future tracks only.
   useEffect(() => {
@@ -284,7 +298,6 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
 
   const skipReadAloud = useCallback(() => {
     stopAudio();
-    spotifyPlay().catch(() => {});
   }, [stopAudio]);
 
   const toggleSpeechPause = useCallback(() => {
@@ -292,16 +305,19 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      audio.play().catch(() => {});
+      audio.play().catch((e) => {
+        onErrorRef.current?.(e);
+        skipReadAloud();
+      });
       setSpeechPaused(false);
     } else {
       audio.pause();
       setSpeechPaused(true);
     }
-  }, []);
+  }, [skipReadAloud]);
 
   const toggleManualRead = useCallback(async () => {
-    if (phaseRef.current !== "idle") {
+    if (phaseRef.current !== "idle" && phaseRef.current !== "fetching_ai") {
       skipReadAloud();
       return;
     }
@@ -316,8 +332,9 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
   useEffect(() => {
     return () => {
       cleanupAudio();
+      void releaseMusic().catch((e) => console.error("Failed to restore Spotify:", e));
     };
-  }, [cleanupAudio]);
+  }, [cleanupAudio, releaseMusic]);
 
   return {
     phase,
