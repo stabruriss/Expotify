@@ -49,6 +49,19 @@ export function AgentChat({
     inputRef.current?.focus({ preventScroll: true });
   }, []);
 
+  useEffect(() => {
+    // The disabled input loses focus during generation, so Escape must not depend on it.
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (loading) cancel();
+      else onClose();
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [loading, cancel, onClose]);
+
   const handleSend = () => {
     const text = input.trim();
     if (!text || loading) return;
@@ -61,13 +74,6 @@ export function AgentChat({
     if (e.key === "Enter" && !e.shiftKey && !isIMEEnter()) {
       e.preventDefault();
       handleSend();
-    }
-    if (e.key === "Escape") {
-      if (loading) {
-        cancel();
-      } else {
-        onClose();
-      }
     }
   };
 
