@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "expotify"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
