@@ -1428,6 +1428,42 @@ html, body, #root {
   color: rgba(254,223,225,0.72);
 }
 
+@media (max-width: 360px) {
+  .agent-chat-header {
+    gap: 4px;
+    padding-right: 0;
+  }
+
+  .agent-chat-title {
+    font-size: 13px;
+    letter-spacing: 0;
+  }
+
+  .agent-chat-header-btns {
+    gap: 4px;
+  }
+
+  .agent-chat-read-toggle {
+    gap: 4px;
+    padding: 4px 6px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+
+  .agent-chat-header .overlay-tts-volume {
+    gap: 3px;
+    flex-shrink: 0;
+  }
+
+  .agent-chat-header .overlay-tts-slider {
+    width: 32px;
+  }
+
+  .agent-chat-reset {
+    width: 20px;
+  }
+}
+
 .agent-chat-messages {
   flex: 1;
   min-height: 0;
