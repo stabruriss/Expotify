@@ -138,11 +138,11 @@ pub fn definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
             name: SEARCH_AND_PLAY,
-            description: "Search Spotify for a song, artist, album, genre or mood and immediately play the best match. Use this whenever the user wants music played. When the user names an artist, pass it in `artist` as well so the match is by that artist and not a cover.",
+            description: "Search Spotify for a song, artist, album, genre or mood and immediately play the best match. Use this whenever the user wants music played. When the user names an artist, pass it in `artist` as well: only a result credited to exactly that artist is played; otherwise nothing plays and the closest matches come back for the user to confirm.",
             parameters: object_schema(
                 json!({
                     "query": { "type": "string", "description": "Search text built from the user's request, including the artist when one was named, e.g. 'Fly Me to the Moon Frank Sinatra', '晴天 周杰伦' or 'rainy day jazz'" },
-                    "artist": { "type": "string", "description": "The artist the user named, exactly as given; an empty string when no artist was named" }
+                    "artist": { "type": "string", "description": "The artist's full name as Spotify credits it (e.g. 'Frank Sinatra', not 'Sinatra'); an empty string when no artist was named" }
                 }),
                 &["query", "artist"],
             ),
@@ -599,23 +599,29 @@ impl ToolRunner {
     }
 }
 
-/// Index of the first result by `artist` (case-insensitive; either name may contain the
-/// other), with a flag saying whether the artist matched. Without a named artist the top
-/// hit is taken.
+/// Case- and whitespace-insensitive artist name, for exact comparison.
+fn normalized_artist(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Index of the first result credited to exactly `artist` (one of the result's credited
+/// artists, compared after normalisation), with a flag saying whether the artist matched.
+/// Substring matches are deliberately not accepted ("Queen" is not Queens of the Stone Age,
+/// a tribute act is not the artist), and short forms or translations are not guessed: those
+/// come back as `artist_not_found` with candidates for the user to confirm. The display
+/// string is never split on commas (a band name may contain one); when a source only gave
+/// the display string it counts as a single name. Without a named artist the top hit is taken.
 fn pick_track(results: &[SearchResult], artist: &str) -> (usize, bool) {
-    let wanted = artist.trim().to_lowercase();
+    let wanted = normalized_artist(artist);
     if wanted.is_empty() {
         return (0, true);
     }
     let found = results.iter().position(|result| {
-        result
-            .artist
-            .split(',')
-            .map(|name| name.trim().to_lowercase())
-            .any(|name| {
-                !name.is_empty()
-                    && (name.contains(&wanted) || (wanted.contains(&name) && name.chars().count() >= 3))
-            })
+        if result.artist_names.is_empty() {
+            normalized_artist(&result.artist) == wanted
+        } else {
+            result.artist_names.iter().any(|name| normalized_artist(name) == wanted)
+        }
     });
     match found {
         Some(index) => (index, true),
@@ -979,11 +985,12 @@ mod tests {
         assert_eq!(outcome.error_code.as_deref(), Some("nothing_playing"));
     }
 
-    fn search_result(name: &str, artist: &str) -> SearchResult {
+    fn search_result(name: &str, artists: &[&str]) -> SearchResult {
         SearchResult {
             id: name.to_lowercase().replace(' ', "-"),
             name: name.into(),
-            artist: artist.into(),
+            artist: artists.join(", "),
+            artist_names: artists.iter().map(|artist| artist.to_string()).collect(),
             album: String::new(),
             album_art_url: None,
             duration_ms: 0,
@@ -991,18 +998,43 @@ mod tests {
         }
     }
 
+    /// A result from a source that only provides the joined display string.
+    fn display_only_result(name: &str, artist: &str) -> SearchResult {
+        SearchResult { artist_names: Vec::new(), ..search_result(name, &[artist]) }
+    }
+
     #[test]
-    fn a_named_artist_wins_over_spotifys_first_hit() {
+    fn a_named_artist_wins_over_spotifys_first_hit_only_on_an_exact_name() {
         let results = vec![
-            search_result("FLY ME TO THE MOON - 2020 Version", "Yoko Takahashi"),
-            search_result("Fly Me to the Moon", "Frank Sinatra, Count Basie"),
+            search_result("FLY ME TO THE MOON - 2020 Version", &["Yoko Takahashi"]),
+            search_result("Fly Me to the Moon", &["Frank Sinatra", "Count Basie"]),
         ];
         assert_eq!(pick_track(&results, "Frank Sinatra"), (1, true));
-        assert_eq!(pick_track(&results, "sinatra"), (1, true));
-        assert_eq!(pick_track(&results, "Count Basie"), (1, true));
+        assert_eq!(pick_track(&results, "  frank   SINATRA "), (1, true), "case and spacing do not matter");
+        assert_eq!(pick_track(&results, "Count Basie"), (1, true), "any credited artist counts");
         assert_eq!(pick_track(&results, "Yoko Takahashi"), (0, true));
+        assert_eq!(pick_track(&results, "Sinatra"), (0, false), "short forms are not guessed; the user confirms");
         assert_eq!(pick_track(&results, "Diana Krall"), (0, false), "no match is reported, never played as a substitute");
         assert_eq!(pick_track(&results, ""), (0, true));
+
+        let lookalikes = vec![
+            search_result("No One Knows", &["Queens of the Stone Age"]),
+            search_result("红豆", &["王菲儿"]),
+            search_result("The Look of Love", &["Diana Krall Tribute"]),
+        ];
+        assert_eq!(pick_track(&lookalikes, "Queen"), (0, false));
+        assert_eq!(pick_track(&lookalikes, "王菲"), (0, false));
+        assert_eq!(pick_track(&lookalikes, "Diana Krall"), (0, false));
+
+        // A band name containing a comma is one credited artist, never split; the same holds
+        // when a source only provided the joined display string.
+        let band = vec![search_result("September", &["Earth, Wind & Fire"])];
+        assert_eq!(pick_track(&band, "Earth, Wind & Fire"), (0, true));
+        assert_eq!(pick_track(&band, "Earth"), (0, false));
+        let display_only = vec![display_only_result("September", "Earth, Wind & Fire")];
+        assert_eq!(pick_track(&display_only, "Earth, Wind & Fire"), (0, true));
+        assert_eq!(pick_track(&display_only, "Earth"), (0, false));
+        assert_eq!(pick_track(&display_only, "Fire"), (0, false));
     }
 
     #[test]

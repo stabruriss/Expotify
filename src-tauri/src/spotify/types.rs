@@ -27,7 +27,12 @@ pub struct TrackInfo {
 pub struct SearchResult {
     pub id: String,
     pub name: String,
+    /// Display string: all credited artists joined with ", ".
     pub artist: String,
+    /// The credited artists one by one (a band name may itself contain a comma); empty when
+    /// the source only provided the display string.
+    #[serde(skip)]
+    pub artist_names: Vec<String>,
     pub album: String,
     pub album_art_url: Option<String>,
     pub duration_ms: u64,

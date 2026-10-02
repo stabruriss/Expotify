@@ -937,6 +937,7 @@ impl SpotifyWebApi {
                     id: id.to_string(),
                     name: name.to_string(),
                     artist: artist.to_string(),
+                    artist_names: Vec::new(),
                     album: item
                         .get("album")
                         .or_else(|| item.get("albumName"))
@@ -966,6 +967,7 @@ impl SpotifyWebApi {
                     id: id.to_string(),
                     name: name.to_string(),
                     artist: artist.to_string(),
+                    artist_names: Vec::new(),
                     album: metadata
                         .and_then(|m| m.get("albumName").or_else(|| m.get("album")))
                         .and_then(|v| v.as_str())
@@ -1033,6 +1035,7 @@ impl SpotifyWebApi {
             id: id.to_string(),
             name: name.to_string(),
             artist: artists.join(", "),
+            artist_names: artists.iter().map(|artist| artist.to_string()).collect(),
             album: album_name.to_string(),
             album_art_url,
             duration_ms,
