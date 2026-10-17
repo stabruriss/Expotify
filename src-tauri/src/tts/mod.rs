@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
-use msedge_tts::tts::stream::{msedge_tts_split_async, SynthesizedResponse};
+use msedge_tts::tts::stream::{tokio_runtime::msedge_tts_split_async, SynthesizedResponse};
 use msedge_tts::tts::SpeechConfig;
-use msedge_tts::voice::Voice;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
@@ -23,8 +22,13 @@ async fn request_audio(text: &str, timeout: Duration) -> Result<Vec<u8>> {
     if text.trim().is_empty() {
         anyhow::bail!("There is no text to read aloud");
     }
-    let voice = Voice::from(DEFAULT_VOICE);
-    let config = SpeechConfig::from(&voice);
+    let config = SpeechConfig {
+        voice_name: DEFAULT_VOICE.to_owned(),
+        audio_format: "audio-24khz-48kbitrate-mono-mp3".to_owned(),
+        pitch: 0,
+        rate: 0,
+        volume: 0,
+    };
     // The library inserts text directly into SSML.
     let text = text
         .replace('&', "&amp;")
@@ -124,5 +128,20 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("no text"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the live Edge speech service; sends fixed test text without playback"]
+    async fn live_service_check_and_mixed_text_synthesis() {
+        crate::initialize_tls();
+        check_available().await.expect("live speech availability");
+        let audio = synthesize("语音服务测试。Music & lyrics: 1 < 2 > 0.")
+            .await
+            .expect("live speech synthesis");
+        assert!(audio.len() > 256, "expected non-empty MP3 audio");
+        assert!(
+            audio.starts_with(b"ID3") || (audio[0] == 0xff && audio[1] & 0xe0 == 0xe0),
+            "expected an ID3 tag or MPEG audio frame header"
+        );
     }
 }

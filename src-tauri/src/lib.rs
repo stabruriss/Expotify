@@ -21,6 +21,12 @@ use tauri::Manager;
 use tauri::RunEvent;
 use tokio::sync::RwLock;
 
+fn initialize_tls() {
+    // Select ring before creating any TLS client: TTS and Spotify's dealer WebSocket
+    // both use the process default, while Edge TTS also enables aws-lc.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 fn claude_helper_path(app: &tauri::App) -> Result<PathBuf, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let bundled = resource_dir.join("claude/expotify-claude-helper");
@@ -40,6 +46,7 @@ fn claude_helper_path(app: &tauri::App) -> Result<PathBuf, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::init();
+    initialize_tls();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -331,4 +338,15 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tls_tests {
+    #[test]
+    fn initialization_is_idempotent_and_allows_default_tls_config() {
+        super::initialize_tls();
+        super::initialize_tls();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        let _ = rustls::ClientConfig::builder();
+    }
 }
