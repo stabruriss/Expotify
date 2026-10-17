@@ -3,7 +3,9 @@ use crate::ai::models::{ModelProvider, ModelSelection, ProviderCatalog};
 use crate::ai::tools::{
     self, ChatCancellation, ToolCall, ToolContext, ToolOutcome, ToolProtocol, ToolRunner,
 };
-use crate::ai::{AgentResponse, AnthropicService, ChatMessage, NativeChatOutcome, OpenAIService};
+use crate::ai::{
+    AgentResponse, AnthropicService, ChatMessage, MagpieService, NativeChatOutcome, OpenAIService,
+};
 use crate::auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use crate::lyrics::{LyricsFetcher, LyricsInfo};
 use crate::spotify::{self, SearchResult, SpotifyDevice, SpotifyWebApi, TrackInfo};
@@ -61,6 +63,8 @@ pub struct AppState {
     pub openai_service: Arc<RwLock<Option<OpenAIService>>>,
     pub anthropic_auth: Arc<AnthropicAuth>,
     pub anthropic_service: Arc<RwLock<Option<AnthropicService>>>,
+    /// The local Magpie gateway: no sign-in, discovered only by `probe_magpie`.
+    pub magpie_service: MagpieService,
     pub spotify_auth: Arc<SpotifyAuth>,
     pub spotify_webapi: Arc<RwLock<Option<SpotifyWebApi>>>,
     pub settings: Arc<RwLock<Settings>>,
@@ -104,6 +108,12 @@ async fn resolve_connected_model(
                 .await
                 .map_err(|e| e.to_string())
         }
+        // Not gated on the last discovery: the request itself reports whether Magpie and the
+        // model are there.
+        ModelProvider::Magpie => state
+            .magpie_service
+            .resolve_model(selection)
+            .map_err(|e| e.to_string()),
     }
 }
 
@@ -214,42 +224,58 @@ pub async fn get_current_track_with_ai(
         }
     };
 
-    let ai_result = if preferred_model.provider() == ModelProvider::Anthropic {
-        let service = state.anthropic_service.read().await;
-        if let Some(ref anthropic) = *service {
-            Some(
-                anthropic
-                    .get_track_description(
-                        &info,
-                        &model,
-                        &prompt,
-                        web_search,
-                        force.unwrap_or(false),
-                        &memories,
-                    )
-                    .await,
-            )
-        } else {
-            None
+    let ai_result = match preferred_model.provider() {
+        ModelProvider::Anthropic => {
+            let service = state.anthropic_service.read().await;
+            if let Some(ref anthropic) = *service {
+                Some(
+                    anthropic
+                        .get_track_description(
+                            &info,
+                            &model,
+                            &prompt,
+                            web_search,
+                            force.unwrap_or(false),
+                            &memories,
+                        )
+                        .await,
+                )
+            } else {
+                None
+            }
         }
-    } else {
-        let service = state.openai_service.read().await;
-        if let Some(ref openai) = *service {
-            Some(
-                openai
-                    .get_track_description(
-                        &info,
-                        &model,
-                        &prompt,
-                        web_search,
-                        force.unwrap_or(false),
-                        &memories,
-                    )
-                    .await,
-            )
-        } else {
-            None
+        ModelProvider::Openai => {
+            let service = state.openai_service.read().await;
+            if let Some(ref openai) = *service {
+                Some(
+                    openai
+                        .get_track_description(
+                            &info,
+                            &model,
+                            &prompt,
+                            web_search,
+                            force.unwrap_or(false),
+                            &memories,
+                        )
+                        .await,
+                )
+            } else {
+                None
+            }
         }
+        ModelProvider::Magpie => Some(
+            state
+                .magpie_service
+                .get_track_description(
+                    &info,
+                    &model,
+                    &prompt,
+                    web_search,
+                    force.unwrap_or(false),
+                    &memories,
+                )
+                .await,
+        ),
     };
 
     if let Some(result) = ai_result {
@@ -364,6 +390,8 @@ pub struct AuthStatus {
     pub anthropic: bool,
     /// Claude OAuth is supported in this build
     pub anthropic_available: bool,
+    /// The last Magpie discovery found at least one fixed model (read here, never probed)
+    pub magpie: bool,
     pub spotify: bool,
 }
 
@@ -375,6 +403,7 @@ pub async fn get_auth_status(state: State<'_, AppState>) -> Result<AuthStatus, S
         openai: state.openai_auth.is_authenticated().await,
         anthropic: authenticated && service_active,
         anthropic_available: true,
+        magpie: state.magpie_service.available(),
         spotify: state.spotify_auth.is_authenticated().await,
     })
 }
@@ -828,6 +857,8 @@ async fn run_agent_chat(
     let (provider_name, protocol) = match provider {
         ModelProvider::Anthropic => ("anthropic", protocols.anthropic),
         ModelProvider::Openai => ("openai", protocols.openai),
+        // Magpie has native tool calling only.
+        ModelProvider::Magpie => ("magpie", ToolProtocol::Native),
     };
     let events = EventContext::new(provider_name, &model, protocol.label());
     let ctx = ToolContext::new(&state.spotify_webapi, &state.settings, track_id.clone());
@@ -891,6 +922,30 @@ async fn run_agent_chat(
                     )
                 })
         }
+        (ModelProvider::Magpie, _) => state
+            .magpie_service
+            .agent_chat_native(
+                &messages,
+                &model,
+                &chat_prompt,
+                &track_name,
+                &artist,
+                &album,
+                volume,
+                web_search,
+                &memories,
+                &ctx,
+                &mut runner,
+                cancellation,
+            )
+            .await
+            .map_err(|e| e.to_string())
+            .map(|outcome| {
+                (
+                    outcome.turns.unwrap_or(1),
+                    native_response(outcome, &runner),
+                )
+            }),
         (_, ToolProtocol::Legacy) => {
             let response = tokio::select! {
                 response = legacy_chat(
@@ -978,44 +1033,48 @@ async fn legacy_chat(
     web_search: bool,
     memories: &[String],
 ) -> Result<AgentResponse, String> {
-    if provider == ModelProvider::Anthropic {
-        let service = state.anthropic_service.read().await;
-        let anthropic = service
-            .as_ref()
-            .ok_or("Claude not connected. Please sign in first.")?;
-        anthropic
-            .agent_chat(
-                messages,
-                model,
-                chat_prompt,
-                track_name,
-                artist,
-                album,
-                volume,
-                web_search,
-                memories,
-            )
-            .await
-            .map_err(|e| e.to_string())
-    } else {
-        let service = state.openai_service.read().await;
-        let openai = service
-            .as_ref()
-            .ok_or("ChatGPT not connected. Please connect in Settings.")?;
-        openai
-            .agent_chat(
-                messages,
-                model,
-                chat_prompt,
-                track_name,
-                artist,
-                album,
-                volume,
-                web_search,
-                memories,
-            )
-            .await
-            .map_err(|e| e.to_string())
+    match provider {
+        ModelProvider::Anthropic => {
+            let service = state.anthropic_service.read().await;
+            let anthropic = service
+                .as_ref()
+                .ok_or("Claude not connected. Please sign in first.")?;
+            anthropic
+                .agent_chat(
+                    messages,
+                    model,
+                    chat_prompt,
+                    track_name,
+                    artist,
+                    album,
+                    volume,
+                    web_search,
+                    memories,
+                )
+                .await
+                .map_err(|e| e.to_string())
+        }
+        ModelProvider::Openai => {
+            let service = state.openai_service.read().await;
+            let openai = service
+                .as_ref()
+                .ok_or("ChatGPT not connected. Please connect in Settings.")?;
+            openai
+                .agent_chat(
+                    messages,
+                    model,
+                    chat_prompt,
+                    track_name,
+                    artist,
+                    album,
+                    volume,
+                    web_search,
+                    memories,
+                )
+                .await
+                .map_err(|e| e.to_string())
+        }
+        ModelProvider::Magpie => Err("Magpie uses native tool calling only.".to_string()),
     }
 }
 
@@ -1081,6 +1140,7 @@ pub async fn tool_protocol_probe(
     let provider = match provider.as_str() {
         "openai" => ModelProvider::Openai,
         "anthropic" => ModelProvider::Anthropic,
+        "magpie" => ModelProvider::Magpie,
         other => return Err(format!("Unknown provider '{other}'")),
     };
     run_tool_probe(state.inner(), provider).await
@@ -1094,6 +1154,7 @@ pub async fn run_tool_probe(
     let provider_name = match provider {
         ModelProvider::Anthropic => "anthropic",
         ModelProvider::Openai => "openai",
+        ModelProvider::Magpie => "magpie",
     };
     // Every report, including one for a failure before the model was reached, carries the
     // run metadata so a poller can tell a real failure from a report that is not there yet.
@@ -1140,8 +1201,19 @@ struct ProbeRun {
 }
 
 async fn probe_provider(state: &AppState, provider: ModelProvider) -> Result<ProbeRun, String> {
-    let chat_prompt = state.settings.read().await.chat_prompt.clone();
-    let selection = ModelSelection::Default { provider };
+    let settings = state.settings.read().await;
+    let chat_prompt = settings.chat_prompt.clone();
+    // Magpie has no default model: its probe uses the Magpie model selected for Chat.
+    let selection = match provider {
+        ModelProvider::Magpie if settings.chat_model.provider() == ModelProvider::Magpie => {
+            settings.chat_model.clone()
+        }
+        ModelProvider::Magpie => {
+            return Err("Select a Magpie model for Chat before probing Magpie.".to_string())
+        }
+        _ => ModelSelection::Default { provider },
+    };
+    drop(settings);
     let model = resolve_connected_model(state, &selection).await?;
     let ctx = ToolContext::new(&state.spotify_webapi, &state.settings, None);
     let mut runner = ToolRunner::dry_run(Arc::new(AtomicBool::new(false)));
@@ -1179,6 +1251,25 @@ async fn probe_provider(state: &AppState, provider: ModelProvider) -> Result<Pro
                 .as_ref()
                 .ok_or("ChatGPT not connected. Please connect in Settings.")?;
             openai
+                .agent_chat_native(
+                    &messages,
+                    &model,
+                    &chat_prompt,
+                    "Probe Track",
+                    "Probe Artist",
+                    "Probe Album",
+                    60,
+                    false,
+                    &[],
+                    &ctx,
+                    &mut runner,
+                    &cancellation,
+                )
+                .await
+        }
+        ModelProvider::Magpie => {
+            state
+                .magpie_service
                 .agent_chat_native(
                     &messages,
                     &model,
@@ -1330,7 +1421,16 @@ pub async fn list_models(
         }
     };
     let (openai, anthropic) = tokio::join!(openai, anthropic);
-    Ok([openai, anthropic].into_iter().flatten().collect())
+    // Magpie is only discovered by `probe_magpie`; this returns that result without probing.
+    let magpie = state.magpie_service.catalog();
+    Ok([openai, anthropic, magpie].into_iter().flatten().collect())
+}
+
+/// Discover the local Magpie gateway (opening Settings or the model picker, Refresh, or launch
+/// with a saved Magpie choice; never from a poll). True when it offers at least one fixed model.
+#[tauri::command]
+pub async fn probe_magpie(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.magpie_service.probe().await)
 }
 
 #[cfg(test)]

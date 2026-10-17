@@ -324,6 +324,40 @@ mod tests {
     }
 
     #[test]
+    fn magpie_choices_keep_their_full_ids_across_save_and_load() {
+        let dir =
+            std::env::temp_dir().join(format!("expotify-settings-test-{}", rand::random::<u64>()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let settings = Settings {
+            ai_model: ModelSelection::Fixed {
+                provider: ModelProvider::Magpie,
+                model: "openrouter/anthropic/claude-sonnet-4.5".into(),
+            },
+            chat_model: ModelSelection::Fixed {
+                provider: ModelProvider::Magpie,
+                model: "vendor/family/model:beta".into(),
+            },
+            ..Settings::default()
+        };
+        std::fs::write(&path, serde_json::to_string_pretty(&settings).unwrap()).unwrap();
+        let loaded = Settings::load_from_path(&path).unwrap();
+        assert_eq!(loaded.ai_model, settings.ai_model);
+        assert_eq!(loaded.chat_model, settings.chat_model);
+        let stored: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            stored["chat_model"],
+            serde_json::json!({"mode":"fixed","provider":"magpie","model":"vendor/family/model:beta"})
+        );
+        assert!(
+            !dir.join("settings.json.pre-model-selection.bak").exists(),
+            "not a legacy file"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn migration_creates_one_private_backup_and_leaves_original_settings_untouched() {
         let dir =
             std::env::temp_dir().join(format!("expotify-settings-test-{}", rand::random::<u64>()));

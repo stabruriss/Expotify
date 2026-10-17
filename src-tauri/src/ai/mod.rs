@@ -1,6 +1,7 @@
 pub mod anthropic;
 pub mod cache;
 pub mod events;
+pub mod magpie;
 pub mod models;
 pub mod openai;
 pub mod tools;
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 pub use anthropic::AnthropicService;
 pub use cache::TrackInfoCache;
+pub use magpie::MagpieService;
 pub use openai::OpenAIService;
 
 /// Agent chat message (user or assistant) — shared between providers.

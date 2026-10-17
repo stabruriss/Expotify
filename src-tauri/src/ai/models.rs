@@ -10,6 +10,8 @@ use tokio::sync::Mutex;
 pub enum ModelProvider {
     Openai,
     Anthropic,
+    /// The user's local Magpie gateway (`ai::magpie`).
+    Magpie,
 }
 
 impl ModelProvider {
@@ -17,6 +19,7 @@ impl ModelProvider {
         match self {
             Self::Openai => "ChatGPT",
             Self::Anthropic => "Claude",
+            Self::Magpie => "Magpie",
         }
     }
 }
@@ -121,6 +124,18 @@ impl ProviderCatalog {
         })
     }
 
+    /// A catalog from a source that has no default model of its own (Magpie).
+    pub fn without_default(provider: ModelProvider, models: Vec<ModelInfo>) -> Self {
+        Self {
+            provider,
+            models,
+            default_model: None,
+            fetched_at: Some(Utc::now()),
+            stale: false,
+            error: None,
+        }
+    }
+
     pub fn resolve_default(&self) -> Result<String> {
         self.default_model.clone().ok_or_else(|| {
             anyhow::anyhow!(
@@ -205,6 +220,39 @@ mod tests {
                 model: "claude-opus-4-6".into()
             }
         );
+    }
+
+    #[test]
+    fn magpie_choices_keep_the_full_gateway_id_and_legacy_strings_never_become_magpie() {
+        let selection = ModelSelection::Fixed {
+            provider: ModelProvider::Magpie,
+            model: "openrouter/anthropic/claude-sonnet-4.5".into(),
+        };
+        let value = serde_json::to_value(&selection).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"mode":"fixed","provider":"magpie","model":"openrouter/anthropic/claude-sonnet-4.5"})
+        );
+        assert_eq!(
+            serde_json::from_value::<ModelSelection>(value).unwrap(),
+            selection
+        );
+        assert_eq!(ModelProvider::Magpie.label(), "Magpie");
+        let legacy: LegacySettings = serde_json::from_str(r#"{"model":"codex/gpt-5.5"}"#).unwrap();
+        assert_eq!(legacy.model.provider(), ModelProvider::Openai);
+        // Saving checks the format only: a saved Default or route id must not block saving
+        // other settings; the Magpie request refuses them instead.
+        for saved in [
+            ModelSelection::Default {
+                provider: ModelProvider::Magpie,
+            },
+            ModelSelection::Fixed {
+                provider: ModelProvider::Magpie,
+                model: "group/fast".into(),
+            },
+        ] {
+            assert!(saved.validate().is_ok());
+        }
     }
 
     #[test]

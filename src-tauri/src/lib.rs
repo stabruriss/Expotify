@@ -9,7 +9,7 @@ mod storage;
 mod tts;
 mod updater;
 
-use ai::{AnthropicService, OpenAIService};
+use ai::{AnthropicService, MagpieService, OpenAIService};
 use auth::{AnthropicAuth, OpenAIAuth, SpotifyAuth};
 use commands::{load_overlay_geometry, AppState};
 use spotify::SpotifyWebApi;
@@ -89,6 +89,7 @@ pub fn run() {
                 openai_service,
                 anthropic_auth,
                 anthropic_service,
+                magpie_service: MagpieService::new(),
                 spotify_auth,
                 spotify_webapi,
                 settings: Arc::new(RwLock::new(settings)),
@@ -99,9 +100,10 @@ pub fn run() {
 
             app.manage(state);
 
-            // Debug-only endpoint probe: EXPOTIFY_TOOL_PROBE=openai|anthropic runs the native
-            // tool-calling path once with a dry-run executor and writes the report next to
-            // settings.json. Never compiled into release builds.
+            // Debug-only endpoint probe: EXPOTIFY_TOOL_PROBE=openai|anthropic|magpie runs the
+            // native tool-calling path once with a dry-run executor and writes the report next
+            // to settings.json (magpie probes the Magpie model selected for Chat). Never
+            // compiled into release builds.
             #[cfg(debug_assertions)]
             if let Ok(provider) = std::env::var("EXPOTIFY_TOOL_PROBE") {
                 let handle = app.handle().clone();
@@ -111,6 +113,7 @@ pub fn run() {
                     let target = match provider.as_str() {
                         "openai" => Some(ai::models::ModelProvider::Openai),
                         "anthropic" => Some(ai::models::ModelProvider::Anthropic),
+                        "magpie" => Some(ai::models::ModelProvider::Magpie),
                         _ => None,
                     };
                     // A report left by an earlier run is moved aside first, so the report file
@@ -125,7 +128,7 @@ pub fn run() {
                     let report = match target {
                         Some(target) => commands::run_tool_probe(state.inner(), target).await,
                         None => Err(format!(
-                            "EXPOTIFY_TOOL_PROBE must be openai or anthropic, got '{provider}'"
+                            "EXPOTIFY_TOOL_PROBE must be openai, anthropic or magpie, got '{provider}'"
                         )),
                     };
                     let report = report.unwrap_or_else(
@@ -301,6 +304,7 @@ pub fn run() {
             commands::tool_protocol_probe,
             // Model listing
             commands::list_models,
+            commands::probe_magpie,
         ])
         .on_window_event(|window, event| {
             // Hide windows on close instead of destroying, so they can be reopened

@@ -15,7 +15,7 @@ use crate::auth::AnthropicAuth;
 use crate::claude_runtime::{ClaudeAuthenticationError, ClaudeSession, HelperEvent};
 use crate::spotify::TrackInfo;
 
-const TRACK_SYSTEM_PROMPT: &str = "You are a music expert with deep knowledge of musical styles, genres, creators, music theory, music and art history, as well as fascinating stories and trivia. You excel at making music accessible and engaging, effectively conveying knowledge while sparking the listener's curiosity.";
+pub(super) const TRACK_SYSTEM_PROMPT: &str = "You are a music expert with deep knowledge of musical styles, genres, creators, music theory, music and art history, as well as fascinating stories and trivia. You excel at making music accessible and engaging, effectively conveying knowledge while sparking the listener's curiosity.";
 
 pub struct AnthropicService {
     auth: Arc<AnthropicAuth>,
