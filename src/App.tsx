@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Markdown from "react-markdown";
 import { useAuth } from "./hooks/useAuth";
 import { useTrack } from "./hooks/useTrack";
@@ -6,7 +6,7 @@ import { useLyrics } from "./hooks/useLyrics";
 import { LyricsDisplay } from "./components/LyricsDisplay";
 import { ModelPicker } from "./components/ModelPicker";
 import { useModelCatalog } from "./hooks/useModelCatalog";
-import { canSaveSelection } from "./lib/models";
+import { canSaveSelection, hasAiProvider } from "./lib/models";
 import { getSettings, updateSettings } from "./lib/tauri";
 import type { ModelSelection, Settings } from "./types";
 import { DEFAULT_MODEL, DEFAULT_AI_PROMPT, DEFAULT_CHAT_PROMPT } from "./types";
@@ -18,6 +18,7 @@ function App() {
   const { onCompositionEnd: imeCompositionEnd, isIMEEnter } = useIMEComposition();
   const {
     authStatus,
+    discoverMagpie,
     loading: authLoading,
     spotifyLoading,
     anthropicPending,
@@ -59,10 +60,19 @@ function App() {
   const [settingsTab, setSettingsTab] = useState<"insight" | "chat" | "memories">("insight");
   const [saving, setSaving] = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const { catalogs, loading: modelsLoading, error: modelsError, refresh: refreshModels } = useModelCatalog(authStatus, showSettings);
+  const { catalogs, loading: modelsLoading, error: modelsError, refresh: refreshModels } = useModelCatalog(authStatus, showSettings, discoverMagpie);
+  const checkedSavedGateway = useRef(false);
 
   // AI is available if any provider is connected
-  const aiConnected = authStatus.openai || authStatus.anthropic;
+  const aiConnected = hasAiProvider(authStatus);
+
+  useEffect(() => {
+    if (!settings || checkedSavedGateway.current) return;
+    checkedSavedGateway.current = true;
+    if (settings.ai_model.provider === "magpie" || settings.chat_model.provider === "magpie") {
+      void discoverMagpie().catch(() => {});
+    }
+  }, [settings, discoverMagpie]);
 
   // Read AI insight from localStorage cache when track changes
   useEffect(() => {
@@ -129,7 +139,7 @@ function App() {
 
   useEffect(() => {
     void loadSettings(false);
-  }, [authStatus.openai, authStatus.anthropic, loadSettings]);
+  }, [authStatus.openai, authStatus.anthropic, authStatus.magpie, loadSettings]);
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -230,6 +240,10 @@ function App() {
               className={`status-dot ${authStatus.anthropic ? "connected" : ""}`}
               title="Claude"
             />
+            {(authStatus.magpie || settings?.ai_model.provider === "magpie" || settings?.chat_model.provider === "magpie") && <span
+              className={`status-dot ${authStatus.magpie ? "connected" : ""}`}
+              title="Magpie"
+            />}
             <span
               className={`status-dot ${authStatus.spotify ? "connected" : ""}`}
               title="Spotify Auth"
@@ -457,7 +471,7 @@ function App() {
               {settingsTab === "insight" && (
                 <>
                   <ModelPicker value={draftModel} onChange={setDraftModel} catalogs={catalogs} auth={authStatus}
-                    loading={modelsLoading} error={modelsError} onRefresh={() => void refreshModels()} />
+                    loading={modelsLoading} error={modelsError} onRefresh={() => void refreshModels()} onOpen={() => void refreshModels(false)} />
 
                   <label className="field-toggle">
                     <input
@@ -487,7 +501,7 @@ function App() {
               {settingsTab === "chat" && (
                 <>
                   <ModelPicker value={draftChatModel} onChange={setDraftChatModel} catalogs={catalogs} auth={authStatus}
-                    loading={modelsLoading} error={modelsError} onRefresh={() => void refreshModels()} />
+                    loading={modelsLoading} error={modelsError} onRefresh={() => void refreshModels()} onOpen={() => void refreshModels(false)} />
 
                   <div className="field-label-row">
                     <label className="field-label">Chat Prompt</label>

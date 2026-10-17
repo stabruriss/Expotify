@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { AuthStatus } from "../types";
 import {
   anthropicCancelOAuth,
@@ -7,6 +7,7 @@ import {
   getAuthStatus,
   openaiLogin,
   openaiLogout,
+  probeMagpie,
   spotifyConnect,
   spotifyDisconnect,
   spotifyLogin,
@@ -16,6 +17,7 @@ export function useAuth() {
   const [authStatus, setAuthStatus] = useState<AuthStatus>({
     openai: false,
     anthropic: false,
+    magpie: false,
     anthropic_available: false,
     spotify: false,
   });
@@ -23,21 +25,41 @@ export function useAuth() {
   const [spotifyLoading, setSpotifyLoading] = useState(false);
   const [anthropicPending, setAnthropicPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const magpieRevision = useRef(0);
+  const pendingMagpie = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     checkAuthStatus();
   }, []);
 
   const checkAuthStatus = useCallback(async () => {
+    const revision = magpieRevision.current;
     try {
       setLoading(true);
       const status = await getAuthStatus();
-      setAuthStatus(status);
+      setAuthStatus(previous => ({ ...status,
+        magpie: revision === magpieRevision.current ? status.magpie : previous.magpie,
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  const discoverMagpie = useCallback(() => {
+    if (pendingMagpie.current) return pendingMagpie.current;
+    const publish = (available: boolean) => {
+      magpieRevision.current++;
+      setAuthStatus(previous => ({ ...previous, magpie: available }));
+      return available;
+    };
+    const request = probeMagpie().then(publish, error => {
+      publish(false);
+      throw error;
+    }).finally(() => { pendingMagpie.current = null; });
+    pendingMagpie.current = request;
+    return request;
   }, []);
 
   const loginOpenai = useCallback(async () => {
@@ -148,6 +170,7 @@ export function useAuth() {
     anthropicPending,
     error,
     checkAuthStatus,
+    discoverMagpie,
     loginOpenai,
     logoutOpenai,
     startAnthropicLogin,

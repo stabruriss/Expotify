@@ -11,6 +11,7 @@ import { useAgentChat } from "../hooks/useAgentChat";
 import { getUnreadChatReplies } from "../lib/chatReadAloud";
 import { SpeechMusicPause } from "../lib/speechMusicPause";
 import { getAuthStatus, getCurrentTrack, showMainWindow, saveOverlayGeometry, spotifyPlayPause, spotifyNextTrack, spotifyPreviousTrack, spotifyGetVolume, spotifySetVolume, spotifyShuffleLiked, spotifyPause, spotifyPlay, ttsSynthesize, getSettings, updateSettings } from "../lib/tauri";
+import { hasAiProvider } from "../lib/models";
 import { useUpdateCheck } from "../hooks/useUpdateCheck";
 import { DevicePicker } from "../components/DevicePicker";
 import { useIMEComposition } from "../hooks/useIMEComposition";
@@ -289,7 +290,7 @@ export default function OverlayApp() {
     const checkAuth = () => {
       getAuthStatus()
         .then((status) => {
-          setIsAuthenticated(status.openai || status.anthropic);
+          setIsAuthenticated(hasAiProvider(status));
           setSpotifyAuthed(status.spotify);
         })
         .catch(() => {});

@@ -34,6 +34,7 @@ export interface Settings {
 export interface AuthStatus {
   openai: boolean;
   anthropic: boolean;
+  magpie: boolean;
   anthropic_available: boolean;
   spotify: boolean;
 }
@@ -56,7 +57,7 @@ export interface SpotifyDevice {
   volume_percent: number | null;
 }
 
-export type ModelProvider = "openai" | "anthropic";
+export type ModelProvider = "openai" | "anthropic" | "magpie";
 export type ModelSelection =
   | { provider: ModelProvider; mode: "default" }
   | { provider: ModelProvider; mode: "fixed"; model: string };

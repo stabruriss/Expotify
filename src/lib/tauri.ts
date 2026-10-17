@@ -197,6 +197,10 @@ export async function listModels(force = false): Promise<ProviderCatalog[]> {
   return invoke("list_models", { force });
 }
 
+export async function probeMagpie(): Promise<boolean> {
+  return invoke("probe_magpie");
+}
+
 // ============ Agent Chat ============
 
 export async function agentChat(messages: ChatMessage[], requestId: string): Promise<AgentChatResult> {
