@@ -1,6 +1,6 @@
 [package]
 name = "expotify"
-version = "0.5.9"
+version = "0.5.10"
 description = "Spotify track info display with AI insights"
 authors = ["wunan"]
 edition = "2021"
