@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { TrackInfo } from "../types";
-import { getCurrentTrack, ttsSynthesize } from "../lib/tauri";
+import { getCurrentTrack, spotifyPlaybackOnThisMac, ttsSynthesize } from "../lib/tauri";
 import type { SpeechMusicPause } from "../lib/speechMusicPause";
 import type { AiFetchEvent } from "./useTrack";
 
@@ -53,6 +53,20 @@ function stripMarkdown(md: string): string {
     .replace(/---+/g, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * With one account on two Macs, the idle Mac's Spotify mirrors the other Mac's playback, so an
+ * automatic read there would speak on the wrong Mac and pause the music on the other. When it
+ * cannot be told where Spotify plays, reads go ahead as before.
+ */
+async function playingOnAnotherDevice(): Promise<boolean> {
+  try {
+    return (await spotifyPlaybackOnThisMac()) === false;
+  } catch (e) {
+    console.error("Failed to check where Spotify is playing:", e);
+    return false;
+  }
 }
 
 export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
@@ -192,6 +206,11 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
       if (sessionRef.current === session) updatePhase("idle");
       return;
     }
+    if (autoTriggered && (await playingOnAnotherDevice())) {
+      if (sessionRef.current === session) updatePhase("idle");
+      return;
+    }
+    if (sessionRef.current !== session) return;
     isAutoTriggeredRef.current = autoTriggered;
     const owner = Symbol("Insight speech");
     musicOwnerRef.current = owner;

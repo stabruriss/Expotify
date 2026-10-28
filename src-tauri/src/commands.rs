@@ -713,6 +713,26 @@ pub async fn spotify_get_devices(state: State<'_, AppState>) -> Result<Vec<Spoti
     })
 }
 
+/// Whether Spotify is playing on this Mac. Automatic read-aloud asks first, because with one
+/// account on two Macs the idle Mac's Spotify app mirrors the other Mac's playback. `None` when
+/// it cannot be told, for example when Spotify is not connected in Expotify.
+#[tauri::command]
+pub async fn spotify_playback_on_this_mac(
+    state: State<'_, AppState>,
+) -> Result<Option<bool>, String> {
+    let webapi = state.spotify_webapi.read().await;
+    let Some(webapi) = webapi.as_ref() else {
+        return Ok(None);
+    };
+    let mac_names = tokio::task::spawn_blocking(spotify::applescript::this_mac_names)
+        .await
+        .map_err(|e| e.to_string())?;
+    webapi.playback_on_this_mac(&mac_names).await.map_err(|e| {
+        log::warn!("[cmd] spotify_playback_on_this_mac error: {e:#}");
+        e.to_string()
+    })
+}
+
 #[tauri::command]
 pub async fn spotify_transfer_playback(
     state: State<'_, AppState>,

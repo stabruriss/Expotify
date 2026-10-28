@@ -298,6 +298,7 @@ pub fn run() {
             commands::spotify_shuffle_liked,
             commands::spotify_get_devices,
             commands::spotify_transfer_playback,
+            commands::spotify_playback_on_this_mac,
             commands::spotify_get_volume,
             commands::spotify_set_volume,
             commands::spotify_play_track,

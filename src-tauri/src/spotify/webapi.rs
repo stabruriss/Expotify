@@ -563,6 +563,21 @@ impl SpotifyWebApi {
         Ok(devices)
     }
 
+    /// Whether Spotify is playing on this Mac rather than on another device of the account. With
+    /// one account on two Macs, the idle Mac's Spotify app mirrors and controls the other Mac's
+    /// playback, so AppleScript cannot tell. `None` when nothing is active or `mac_names` do not
+    /// pick out exactly one computer among the Connect devices.
+    pub async fn playback_on_this_mac(&self, mac_names: &[String]) -> Result<Option<bool>> {
+        let cluster = self
+            .observe_connect_cluster()
+            .await
+            .context("Failed to observe Spotify Connect cluster")?;
+        Ok(Self::active_on_this_mac(
+            &Self::parse_connect_devices(&cluster),
+            mac_names,
+        ))
+    }
+
     /// Play a specific track by URI via Spotify Connect API.
     /// This sends the command over the network so the desktop app window is NOT activated.
     pub async fn play_track(&self, uri: &str) -> Result<()> {
@@ -856,6 +871,40 @@ impl SpotifyWebApi {
             .filter(|name| !name.is_empty())
             .unwrap_or("Unknown device")
             .to_string()
+    }
+
+    fn active_on_this_mac(devices: &[SpotifyDevice], mac_names: &[String]) -> Option<bool> {
+        if !devices.iter().any(|device| device.is_active) {
+            return None;
+        }
+        let mut this_mac = devices.iter().filter(|device| {
+            device.device_type == "computer"
+                && mac_names
+                    .iter()
+                    .any(|name| Self::same_device_name(&device.name, name))
+        });
+        let device = this_mac.next()?;
+        if this_mac.next().is_some() {
+            return None;
+        }
+        Some(device.is_active)
+    }
+
+    /// Spotify names a Mac after its computer name. Case and the typographic apostrophe in
+    /// macOS default names ("Wu’s MacBook Pro") are ignored.
+    fn same_device_name(a: &str, b: &str) -> bool {
+        let normalize = |name: &str| {
+            name.trim()
+                .chars()
+                .map(|c| match c {
+                    '\u{2018}' | '\u{2019}' | '\u{02BC}' => '\'',
+                    c => c,
+                })
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+        };
+        let a = normalize(a);
+        !a.is_empty() && a == normalize(b)
     }
 
     // ── Response parsers ────────────────────────────────────────────────
@@ -1169,5 +1218,105 @@ impl SpotifyWebApi {
             out.push_str("...");
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(name: &str, device_type: &str, is_active: bool) -> SpotifyDevice {
+        SpotifyDevice {
+            id: name.to_lowercase().replace(' ', "-"),
+            name: name.to_string(),
+            device_type: device_type.to_string(),
+            is_active,
+            volume_percent: None,
+        }
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(ToString::to_string).collect()
+    }
+
+    fn on_this_mac(devices: &[SpotifyDevice], mac_names: &[&str]) -> Option<bool> {
+        SpotifyWebApi::active_on_this_mac(devices, &names(mac_names))
+    }
+
+    #[test]
+    fn this_mac_is_told_apart_from_the_other_mac_by_its_computer_name() {
+        let devices = [
+            device("Wu’s MacBook Pro", "computer", true),
+            device("Wu’s Mac mini", "computer", false),
+        ];
+        assert_eq!(on_this_mac(&devices, &["Wu’s MacBook Pro"]), Some(true));
+        assert_eq!(on_this_mac(&devices, &["Wu’s Mac mini"]), Some(false));
+    }
+
+    #[test]
+    fn playback_on_a_phone_is_not_on_this_mac() {
+        let devices = [
+            device("Wu’s MacBook Pro", "computer", false),
+            device("iPhone", "smartphone", true),
+        ];
+        assert_eq!(on_this_mac(&devices, &["Wu’s MacBook Pro"]), Some(false));
+    }
+
+    #[test]
+    fn names_match_regardless_of_case_apostrophes_and_which_mac_name_spotify_uses() {
+        let devices = [
+            device("wu's macbook pro ", "computer", true),
+            device("Wus-Mac-mini", "computer", false),
+        ];
+        assert_eq!(on_this_mac(&devices, &["Wu’s MacBook Pro"]), Some(true));
+        assert_eq!(
+            on_this_mac(&devices, &["Wu’s Mac mini", "Wus-Mac-mini"]),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn it_cannot_be_told_when_nothing_plays_or_the_name_is_missing_or_shared() {
+        let idle = [
+            device("Wu’s MacBook Pro", "computer", false),
+            device("Wu’s Mac mini", "computer", false),
+        ];
+        assert_eq!(on_this_mac(&idle, &["Wu’s MacBook Pro"]), None);
+
+        let same_names = [
+            device("MacBook Pro", "computer", true),
+            device("MacBook Pro", "computer", false),
+        ];
+        assert_eq!(on_this_mac(&same_names, &["MacBook Pro"]), None);
+
+        let playing = [device("Wu’s Mac mini", "computer", true)];
+        assert_eq!(on_this_mac(&playing, &["Wu’s MacBook Pro"]), None);
+        assert_eq!(on_this_mac(&playing, &[]), None);
+        assert_eq!(on_this_mac(&playing, &[""]), None);
+    }
+
+    #[test]
+    fn only_a_computer_can_be_this_mac() {
+        let devices = [
+            device("Wu’s MacBook Pro", "speaker", true),
+            device("Wu’s Mac mini", "computer", false),
+        ];
+        assert_eq!(on_this_mac(&devices, &["Wu’s MacBook Pro"]), None);
+    }
+
+    #[test]
+    fn the_connect_cluster_decides_which_device_is_playing() {
+        let cluster = serde_json::json!({
+            "active_device_id": "mini",
+            "devices": {
+                "book": {"device_id": "book", "name": "Wu’s MacBook Pro", "device_type": "COMPUTER"},
+                "mini": {"device_id": "mini", "name": "Wu’s Mac mini", "device_type": "COMPUTER"},
+                "hobs_1": {"name": "Wu’s MacBook Pro", "device_type": "COMPUTER",
+                    "capabilities": {"hidden": true}}
+            }
+        });
+        let devices = SpotifyWebApi::parse_connect_devices(&cluster);
+        assert_eq!(on_this_mac(&devices, &["Wu’s MacBook Pro"]), Some(false));
+        assert_eq!(on_this_mac(&devices, &["Wu’s Mac mini"]), Some(true));
     }
 }

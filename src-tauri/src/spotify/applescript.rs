@@ -73,6 +73,19 @@ pub fn is_spotify_running() -> bool {
         .unwrap_or(false)
 }
 
+/// This Mac's names as Spotify may list it among Connect devices: the computer name
+/// ("Wu’s MacBook Pro") and the local host name ("Wus-MacBook-Pro").
+pub fn this_mac_names() -> Vec<String> {
+    ["ComputerName", "LocalHostName"]
+        .into_iter()
+        .filter_map(|key| {
+            let output = Command::new("scutil").args(["--get", key]).output().ok()?;
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            (output.status.success() && !name.is_empty()).then_some(name)
+        })
+        .collect()
+}
+
 /// Get the current playing track from Spotify via AppleScript
 pub fn get_current_track() -> Result<Option<TrackInfo>> {
     if !is_spotify_running() {

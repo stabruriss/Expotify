@@ -179,6 +179,11 @@ export async function spotifyTransferPlayback(deviceId: string): Promise<void> {
   return invoke("spotify_transfer_playback", { deviceId });
 }
 
+/** Whether Spotify is playing on this Mac; null when that cannot be told. */
+export async function spotifyPlaybackOnThisMac(): Promise<boolean | null> {
+  return invoke("spotify_playback_on_this_mac");
+}
+
 export async function spotifyGetVolume(): Promise<number> {
   return invoke("spotify_get_volume");
 }
