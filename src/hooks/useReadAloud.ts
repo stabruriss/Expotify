@@ -23,6 +23,8 @@ interface UseReadAloudOptions {
   displayedAiTrackId: string | null;
   aiLoading: boolean;
   lastAiFetch: AiFetchEvent | null;
+  /** Skip automatic reads while Spotify plays on another device. */
+  skipWhenPlayingElsewhere: boolean;
   ttsVolume?: number;
   onError?: (error: unknown) => void;
 }
@@ -61,6 +63,8 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
   const ttsVolumeRef = useRef(ttsVolume);
   const onErrorRef = useRef(options.onError);
   onErrorRef.current = options.onError;
+  const skipWhenPlayingElsewhereRef = useRef(options.skipWhenPlayingElsewhere);
+  skipWhenPlayingElsewhereRef.current = options.skipWhenPlayingElsewhere;
 
   const [phase, setPhase] = useState<ReadAloudPhase>("idle");
   const [speechPaused, setSpeechPaused] = useState(false);
@@ -189,7 +193,7 @@ export function useReadAloud(options: UseReadAloudOptions): UseReadAloudReturn {
   );
 
   const beginRead = useCallback(async (markdown: string, trackId: string, autoTriggered: boolean, session: number) => {
-    const mayStart = await readMayStart(autoTriggered, {
+    const mayStart = await readMayStart(autoTriggered && skipWhenPlayingElsewhereRef.current, {
       playbackOnThisMac: spotifyPlaybackOnThisMac,
       trackIsCurrent: () => verifyCurrentTrack(trackId, session),
     });

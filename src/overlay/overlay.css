@@ -1391,6 +1391,48 @@ html, body, #root {
 
 .overlay-ai-read-menu-item small { font-size: 9px; opacity: 0.62; }
 
+.overlay-ai-read-menu-divider {
+  flex: none;
+  height: 1px;
+  margin: 2px 4px;
+  background: rgba(254,223,225,0.1);
+}
+
+.overlay-ai-read-menu-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  flex: none;
+  padding: 7px 8px;
+  border-radius: 5px;
+  color: rgba(254,223,225,0.58);
+  font-size: 11px;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.overlay-ai-read-menu-check:hover {
+  background: rgba(254,223,225,0.08);
+  color: rgba(254,223,225,0.88);
+}
+
+.overlay-ai-read-menu-check input {
+  flex: none;
+  margin: 1px 0 0;
+  accent-color: #7EB792;
+}
+
+.overlay-ai-read-menu-check.disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.overlay-ai-read-menu-check.disabled:hover {
+  background: none;
+  color: rgba(254,223,225,0.58);
+}
+
 /* Keep all options reachable in the minimum-height floating window. */
 @media (max-height: 300px) {
   .overlay-ai-read-menu {
@@ -1407,7 +1449,7 @@ html, body, #root {
   .overlay-ai-controls { padding-bottom: 5px; margin-bottom: 5px; }
   .overlay-ai-panel-content .overlay-ai-footer { min-height: 16px; padding-top: 3px; margin-top: 0; }
   .overlay-ai-read-menu { top: 91px; max-height: calc(100vh - 95px); gap: 2px; }
-  .overlay-ai-read-menu-item { padding: 4px 8px; }
+  .overlay-ai-read-menu-item, .overlay-ai-read-menu-check { padding: 4px 8px; }
   .overlay-ai-read-menu-item small { display: none; }
 }
 

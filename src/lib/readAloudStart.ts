@@ -8,14 +8,14 @@ interface ReadStartChecks {
 /**
  * Whether a read may pause the music and speak.
  *
- * With one account on two Macs, the idle Mac's Spotify mirrors the other Mac's playback, so an
- * automatic read there would speak on the wrong Mac and pause the music on the other. Automatic
- * reads are skipped while another device plays; when that cannot be told, they go ahead as before.
+ * Reads speak on this Mac wherever the music plays: a speaker, a phone or another Mac. With one
+ * account on several Macs, a Mac can opt out of automatic reads while another device plays
+ * (`skipWhenPlayingElsewhere`); when that cannot be told, the read goes ahead.
  * The device check is a network round trip, so the track is checked after it, last before the
  * music is paused: a track change during the check must not let the old read through.
  */
-export async function readMayStart(autoTriggered: boolean, checks: ReadStartChecks): Promise<boolean> {
-  if (autoTriggered && (await playingOnAnotherDevice(checks.playbackOnThisMac))) return false;
+export async function readMayStart(skipWhenPlayingElsewhere: boolean, checks: ReadStartChecks): Promise<boolean> {
+  if (skipWhenPlayingElsewhere && (await playingOnAnotherDevice(checks.playbackOnThisMac))) return false;
   return checks.trackIsCurrent();
 }
 

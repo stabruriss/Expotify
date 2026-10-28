@@ -124,6 +124,16 @@ export default function OverlayApp() {
     setReadModeMenuOpen((open) => !open);
   }, []);
 
+  // Overlay-local and off by default: when on, automatic reads are skipped while Spotify plays on
+  // another device, so one of several Macs on the account can stay silent.
+  const [skipReadElsewhere, setSkipReadElsewhere] = useState(
+    () => localStorage.getItem("expotify_insight_read_skip_elsewhere") === "true"
+  );
+  const changeSkipReadElsewhere = useCallback((skip: boolean) => {
+    setSkipReadElsewhere(skip);
+    localStorage.setItem("expotify_insight_read_skip_elsewhere", String(skip));
+  }, []);
+
   const isReadAloudActive = readAloudMode !== "off";
 
   // Auto-fetch AI insight toggle (synced from main window settings)
@@ -553,6 +563,7 @@ export default function OverlayApp() {
     displayedAiTrackId,
     aiLoading,
     lastAiFetch,
+    skipWhenPlayingElsewhere: skipReadElsewhere,
     ttsVolume,
     onError: reportSpeechError,
   });
@@ -1505,6 +1516,19 @@ export default function OverlayApp() {
                         >
                           <span>Cached + new</span><small>Include cached insights</small>
                         </button>
+                        <div className="overlay-ai-read-menu-divider" aria-hidden="true" />
+                        <label
+                          className={`overlay-ai-read-menu-check${spotifyAuthed ? "" : " disabled"}`}
+                          title={spotifyAuthed ? undefined : "Connect Spotify in Expotify to use this"}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={skipReadElsewhere}
+                            disabled={!spotifyAuthed}
+                            onChange={(e) => changeSkipReadElsewhere(e.target.checked)}
+                          />
+                          <span>Skip auto read when music plays on another device (computer, speaker or phone)</span>
+                        </label>
                       </div>
                     )}
                   </div>

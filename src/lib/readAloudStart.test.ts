@@ -20,13 +20,13 @@ function checks(device: () => Promise<boolean | null>, trackIsCurrent = async ()
 }
 
 describe("starting a read", () => {
-  test("an automatic read is skipped while another device plays", async () => {
+  test("with the option on, a read is skipped while another device plays", async () => {
     const c = checks(async () => false);
     expect(await readMayStart(true, c.checks)).toBe(false);
     expect(c.calls).toEqual(["device"]);
   });
 
-  test("an automatic read goes ahead on this Mac or when the device cannot be told", async () => {
+  test("with the option on, a read goes ahead on this Mac or when the device cannot be told", async () => {
     for (const device of [async () => true, async () => null, async () => { throw new Error("offline"); }]) {
       const c = checks(device);
       expect(await readMayStart(true, c.checks)).toBe(true);
@@ -34,7 +34,7 @@ describe("starting a read", () => {
     }
   });
 
-  test("a manual read never asks where Spotify plays", async () => {
+  test("without the option, as by default and for manual reads, a read never asks where Spotify plays", async () => {
     const c = checks(async () => false);
     expect(await readMayStart(false, c.checks)).toBe(true);
     expect(c.calls).toEqual(["track"]);
